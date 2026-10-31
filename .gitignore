@@ -1,0 +1,21 @@
+# Build output
+build/
+*.exe
+*.dll
+*.pdb
+*.dmp
+# Game files and keys: never in this repository
+keys/
+*.keys
+*.nsp
+*.nsz
+*.xci
+*.xcz
+*.nca
+*.nso
+*.npdm
+*.pak
+*.utoc
+*.ucas
+extracted/
+saves/
