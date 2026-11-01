@@ -1,4 +1,4 @@
-// Graphics pipelines (NVN_PLAN 7.4) from the queue's bound state, for draws.
+// Graphics pipelines from the queue's bound state, for draws.
 #pragma once
 
 #include "render.h"
@@ -18,7 +18,7 @@ struct NotYet : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-/// A draw whose pipeline is still being built on a worker (SHADER_PLAN Phase 3, pipeline.cpp PipelineFor): skipped
+/// A draw whose pipeline is still being built on a worker (pipeline.cpp PipelineFor): skipped
 /// whatever RT_NVN_SKIP_DRAWS says, and counted apart from the draws skipped for what the layer cannot do.
 struct NotReady : NotYet {
     using NotYet::NotYet;
@@ -84,7 +84,7 @@ struct GraphicsPipeline {
     bool building = false; // on a worker (RT_NVN_PIPELINE_WAIT): its other fields are not there yet; under the cache's lock
 };
 
-/// One stage translated on its own (SHADER_PLAN Phase 1, pipeline.cpp StageFor), shared by every pipeline that
+/// One stage translated on its own (pipeline.cpp StageFor), shared by every pipeline that
 /// uses it: its module and its own descriptor set. A fragment stage's set is pushed when it fits (set 0, with
 /// `push_update` made for a layout of that set alone, compatible with every pipeline's); other sets come from
 /// the submission's DescriptorArena (`set_update`).

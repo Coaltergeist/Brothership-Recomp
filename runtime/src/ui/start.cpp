@@ -34,6 +34,8 @@
 #include "../platform/platform.h"
 #include "../rt.h"
 #include "../window.h"
+#include "look.h"
+#include "seed.h"
 
 namespace rt::ui {
 namespace {
@@ -55,7 +57,24 @@ struct Screen {
     std::map<std::string, std::array<char, 1024>> folder; // the folders being edited, by option
     std::string built_for;    // the game and build folders of the last Build press: its failure shows only for them
     bool focus = true;        // put the gamepad / keyboard focus on the page's first item
+    bool handed_over = false; // the shader steps were handed to `--seed` (or that failed: handover_problem)
+    std::string handover_problem;
 };
+
+/// Build's game steps are done (Stage::kSeedNext): the shader steps go to a run of this program of its own
+/// (`--seed`, seed.h), and this one ends without writing the pipeline cache - the seed never runs beside a start
+/// screen (build.h Steps).
+void HandOver(Screen& s) {
+    s.handed_over = true;
+    if (!StartSelf("--seed", &s.handover_problem)) {
+        s.handover_problem = "Could not start the shader cache's build: " + s.handover_problem;
+        Log("start screen: %s", s.handover_problem.c_str());
+        return;
+    }
+    Log("start screen: the shader cache is built by a run of its own (--seed): ending");
+    nvn::KeepPipelineCacheFile();
+    Exit(0);
+}
 
 /// A folder chosen in the system's dialog (SDL calls back on a thread of its own): applied by the next frame.
 std::mutex g_picked_mu;
@@ -232,7 +251,7 @@ void BuildPage(Screen& s) {
         ImGui::Text("%s", st.step.c_str());
         const float fraction = st.remaining >= 0 ? static_cast<float>(st.elapsed / (st.elapsed + st.remaining)) : -1.0f;
         char overlay[64] = "";
-        if ((st.stage == build::Stage::kCompile || st.stage == build::Stage::kSeed) && st.total) {
+        if (st.stage == build::Stage::kCompile && st.total) {
             std::snprintf(overlay, sizeof overlay, "%d / %d", st.done, st.total);
         }
         ImGui::ProgressBar(fraction >= 0 ? fraction : -1.0f * static_cast<float>(ImGui::GetTime()), ImVec2(-FLT_MIN, 0),
@@ -245,6 +264,8 @@ void BuildPage(Screen& s) {
     } else {
         // (the last build's outcome only while the folders are the ones it used: a changed setting is a new start)
         const bool same = s.built_for == paths.source + "|" + paths.dir;
+        if (same && st.stage == build::Stage::kSeedNext) ImGui::Text("%s", st.step.c_str());
+        if (!s.handover_problem.empty()) ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.4f, 1.0f), "%s", s.handover_problem.c_str());
         if (same && st.stage == build::Stage::kDone) ImGui::Text("Built in %s.", MinSec(st.elapsed).c_str());
         if (same && st.stage == build::Stage::kCancelled) ImGui::Text("Cancelled.");
         const bool failed = same && st.stage == build::Stage::kFailed;
@@ -258,73 +279,15 @@ void BuildPage(Screen& s) {
         }
         ImGui::Spacing();
         if (s.focus) ImGui::SetKeyboardFocusHere(), s.focus = false;
-        if (ImGui::Button(s.ready ? "Rebuild" : "Build", ImVec2(em * 8, 0)) && build::Start()) {
+        if (ImGui::Button(s.ready ? "Rebuild" : "Build", ImVec2(em * 8, 0)) && build::Start(build::Steps::kGame)) {
             s.built_for = paths.source + "|" + paths.dir;
+            s.handed_over = false, s.handover_problem.clear();
             Log("start screen: build");
         }
     }
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
     Back(s);
-}
-
-/// The background picture: RT_UI_BACKGROUND=<file> (any PNG), else background.png in the per-user folder (a player's
-/// own), else background.png beside the program (the release's: art of our own only - never the game's, which is
-/// Nintendo's, PORT_PLAN §6.1).
-ImTextureData* LoadBackground() {
-    const char* named = std::getenv("RT_UI_BACKGROUND");
-    std::error_code ec;
-    std::string path;
-    if (named && *named) {
-        path = named;
-    } else {
-        const std::filesystem::path mine = std::filesystem::path(options::UserDir()) / "background.png";
-        const std::filesystem::path shipped =
-            std::filesystem::path(platform::ExecutablePath()).parent_path() / "background.png";
-        path = (std::filesystem::exists(mine, ec) ? mine : shipped).string();
-    }
-    if (!std::filesystem::exists(std::filesystem::path(path), ec)) {
-        if (named && *named) Log("start screen: no background picture %s", path.c_str());
-        return nullptr;
-    }
-    SDL_Surface* loaded = SDL_LoadPNG(path.c_str());
-    SDL_Surface* rgba = loaded ? SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32) : nullptr;
-    if (loaded) SDL_DestroySurface(loaded);
-    if (!rgba) {
-        Log("start screen: background %s not loaded: %s", path.c_str(), SDL_GetError());
-        return nullptr;
-    }
-    auto* tex = new ImTextureData;
-    tex->Create(ImTextureFormat_RGBA32, rgba->w, rgba->h);
-    tex->UseColors = true;
-    for (int y = 0; y < rgba->h; ++y) {
-        std::memcpy(tex->GetPixelsAt(0, y), static_cast<const unsigned char*>(rgba->pixels) + y * rgba->pitch,
-                    static_cast<size_t>(rgba->w) * 4);
-    }
-    Log("start screen: background %s (%dx%d)", path.c_str(), rgba->w, rgba->h);
-    SDL_DestroySurface(rgba);
-    ImGui::RegisterUserTexture(tex);
-    return tex;
-}
-
-/// The picture filling the window (cropped to its aspect ratio, centred), darkened by `dim` (0-1).
-void DrawBackground(const Screen& s, float dim) {
-    if (!s.background) return;
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float vw = vp->Size.x, vh = vp->Size.y;
-    const float iw = static_cast<float>(s.background->Width), ih = static_cast<float>(s.background->Height);
-    ImVec2 uv0(0, 0), uv1(1, 1);
-    if (vw / vh > iw / ih) { // the window is wider: crop top and bottom
-        const float keep = (iw / ih) / (vw / vh);
-        uv0.y = (1 - keep) / 2, uv1.y = 1 - uv0.y;
-    } else {
-        const float keep = (vw / vh) / (iw / ih);
-        uv0.x = (1 - keep) / 2, uv1.x = 1 - uv0.x;
-    }
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    const ImVec2 p0 = vp->Pos, p1(vp->Pos.x + vw, vp->Pos.y + vh);
-    dl->AddImage(s.background->GetTexRef(), p0, p1, uv0, uv1);
-    if (dim > 0) dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, static_cast<int>(dim * 255)));
 }
 
 void MainPage(Screen& s) {
@@ -471,6 +434,76 @@ PFN_vkVoidFunction LoadVulkan(const char* name, void*) {
 
 } // namespace
 
+void ApplyStyle() {
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.FontSizeBase = 20.0f;
+    style.WindowRounding = 0.0f;
+    style.FrameRounding = 4.0f;
+    style.ItemSpacing.y = 8.0f;
+}
+
+std::string BackgroundPath() {
+    const char* named = std::getenv("RT_UI_BACKGROUND");
+    std::error_code ec;
+    std::string path;
+    if (named && *named) {
+        path = named;
+    } else {
+        const std::filesystem::path mine = std::filesystem::path(options::UserDir()) / "background.png";
+        const std::filesystem::path shipped =
+            std::filesystem::path(platform::ExecutablePath()).parent_path() / "background.png";
+        path = (std::filesystem::exists(mine, ec) ? mine : shipped).string();
+    }
+    if (!std::filesystem::exists(std::filesystem::path(path), ec)) {
+        if (named && *named) Log("start screen: no background picture %s", path.c_str());
+        return "";
+    }
+    return path;
+}
+
+ImTextureData* LoadBackground() {
+    const std::string path = BackgroundPath();
+    if (path.empty()) return nullptr;
+    SDL_Surface* loaded = SDL_LoadPNG(path.c_str());
+    SDL_Surface* rgba = loaded ? SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_RGBA32) : nullptr;
+    if (loaded) SDL_DestroySurface(loaded);
+    if (!rgba) {
+        Log("start screen: background %s not loaded: %s", path.c_str(), SDL_GetError());
+        return nullptr;
+    }
+    auto* tex = new ImTextureData;
+    tex->Create(ImTextureFormat_RGBA32, rgba->w, rgba->h);
+    tex->UseColors = true;
+    for (int y = 0; y < rgba->h; ++y) {
+        std::memcpy(tex->GetPixelsAt(0, y), static_cast<const unsigned char*>(rgba->pixels) + y * rgba->pitch,
+                    static_cast<size_t>(rgba->w) * 4);
+    }
+    Log("start screen: background %s (%dx%d)", path.c_str(), rgba->w, rgba->h);
+    SDL_DestroySurface(rgba);
+    ImGui::RegisterUserTexture(tex);
+    return tex;
+}
+
+void DrawBackground(ImTextureData* background, float dim) {
+    if (!background) return;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float vw = vp->Size.x, vh = vp->Size.y;
+    const float iw = static_cast<float>(background->Width), ih = static_cast<float>(background->Height);
+    ImVec2 uv0(0, 0), uv1(1, 1);
+    if (vw / vh > iw / ih) { // the window is wider: crop top and bottom
+        const float keep = (iw / ih) / (vw / vh);
+        uv0.y = (1 - keep) / 2, uv1.y = 1 - uv0.y;
+    } else {
+        const float keep = (vw / vh) / (iw / ih);
+        uv0.x = (1 - keep) / 2, uv1.x = 1 - uv0.x;
+    }
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const ImVec2 p0 = vp->Pos, p1(vp->Pos.x + vw, vp->Pos.y + vh);
+    dl->AddImage(background->GetTexRef(), p0, p1, uv0, uv1);
+    if (dim > 0) dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, static_cast<int>(dim * 255)));
+}
+
 bool Wanted(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--play") == 0) return false;
@@ -480,10 +513,11 @@ bool Wanted(int argc, char** argv) {
     return window::IsOpen() && nvn::Enabled() && !(skip && *skip && std::strcmp(skip, "0") != 0) && !(input && *input);
 }
 
-void Run(const std::vector<std::string>& built_mods, bool player) {
+void Run(const std::vector<std::string>& built_mods, bool player, bool build_page) {
     Screen s;
     s.built = built_mods;
     s.player = player;
+    if (build_page) s.page = Page::kBuild; // (back from `--seed`)
     for (const options::Option& o : options::All()) {
         if (std::strcmp(o.values, "<folder>") == 0) {
             std::snprintf(s.folder[o.name].data(), s.folder[o.name].size(), "%s", options::Saved(o.name).c_str());
@@ -499,12 +533,8 @@ void Run(const std::vector<std::string>& built_mods, bool player) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = nullptr; // nothing of ImGui's own on disk
     io.Fonts->AddFontDefaultVector();
-    ImGui::StyleColorsDark();
+    ApplyStyle();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.FontSizeBase = 20.0f;
-    style.WindowRounding = 0.0f;
-    style.FrameRounding = 4.0f;
-    style.ItemSpacing.y = 8.0f;
     s.background = LoadBackground();
     if (s.background) style.Colors[ImGuiCol_WindowBg].w = 0.0f; // the picture shows through the page
 
@@ -552,7 +582,8 @@ void Run(const std::vector<std::string>& built_mods, bool player) {
             if (part == "page=settings") s.page = Page::kSettings;
             if (part == "page=mods") s.page = Page::kMods;
             if (part == "page=build") s.page = Page::kBuild;
-            if (part == "build" && s.player && build::Start()) { // (a test: the Build button pressed at once)
+            // (a test: Build pressed at once - not again when back from `--seed`, which inherits RT_UI_TEST)
+            if (part == "build" && s.player && !build_page && build::Start(build::Steps::kGame)) {
                 const build::Paths paths = build::Where();
                 s.built_for = paths.source + "|" + paths.dir;
             }
@@ -565,6 +596,7 @@ void Run(const std::vector<std::string>& built_mods, bool player) {
     const auto shown = next;
     while (!s.play) {
         CheckReady(s);
+        if (s.player && !s.handed_over && !build::Running() && build::Get().stage == build::Stage::kSeedNext) HandOver(s);
         if (autoplay >= 0 && !build::Running() && s.ready &&
             std::chrono::duration<double>(std::chrono::steady_clock::now() - shown).count() >= autoplay) {
             Log("start screen: RT_UI_TEST: play");
@@ -594,7 +626,7 @@ void Run(const std::vector<std::string>& built_mods, bool player) {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        DrawBackground(s, s.page == Page::kMain ? 0.0f : 0.72f);
+        DrawBackground(s.background, s.page == Page::kMain ? 0.0f : 0.72f);
         const ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);

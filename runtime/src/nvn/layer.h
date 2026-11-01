@@ -1,4 +1,4 @@
-// The NVN layer (NVN_PLAN): Nintendo's graphics API implemented by the runtime
+// The NVN layer: Nintendo's graphics API implemented by the runtime
 // on Vulkan, in place of the game's own NVN driver.
 //
 // RT_GPU=nvn turns it on (the default, RT_GPU=driver, keeps the game's driver
@@ -30,5 +30,9 @@ void InstallShadows();
 /// Writes the driver's pipeline cache if pipelines were made since its last write, and logs the run's
 /// pipeline totals (pipeline.cpp). Called by Exit; nothing without a cache.
 void SavePipelineCacheAtExit();
+
+/// From now on this run writes the pipeline cache file neither at exit nor at a quiet moment: a run that follows
+/// replaces it (the start screen handing the seed over to `nxrt --seed`: its own copy is the old one).
+void KeepPipelineCacheFile();
 
 } // namespace rt::nvn

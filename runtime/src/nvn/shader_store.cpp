@@ -1,4 +1,4 @@
-// SHADER_PLAN Phase 4: the local store of translated stages (shader_store.h).
+// the local store of translated stages (shader_store.h).
 #include "shader_store.h"
 #include "shaders.h"
 #include "vk.h"

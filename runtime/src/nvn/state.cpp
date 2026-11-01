@@ -1,4 +1,4 @@
-// The small state objects (NVN_PLAN 3.3): BlendState, ColorState,
+// The small state objects: BlendState, ColorState,
 // ChannelMaskState, DepthStencilState, MultisampleState, PolygonState,
 // VertexAttribState, VertexStreamState. Each keeps the layer's own packed
 // fields inline in the game's storage, so the game can copy them by value.

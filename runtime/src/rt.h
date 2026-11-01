@@ -55,7 +55,7 @@ constexpr u64 kAddressSpaceEnd = 1ULL << 39;
 constexpr u64 kWindowBase = 0;
 constexpr u64 kWindowSize = kAddressSpaceEnd;
 // Where the window lies in the host: fixed, so lifted code can reach guest memory as this constant plus the
-// guest address (old_plans/FASTMEM_PLAN.md Phase 2). 64 TB: far from where Linux and Windows place images, heaps and
+// guest address. 64 TB: far from where Linux and Windows place images, heaps and
 // stacks (1 TB was taken once on Windows: high-entropy ASLR spreads low allocations that far).
 constexpr uintptr_t kHostWindowBase = 0x4000'0000'0000;
 constexpr u64 kImageBase = 0x0800'0000;

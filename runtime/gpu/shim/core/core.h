@@ -1,5 +1,5 @@
 // Shim for drippu's core/core.h: the part of Core::System that video_core
-// and audio_core use (see analysis/agent/reports/videocore_report.md §1.1, verified). It shadows
+// and audio_core use. It shadows
 // the real header through the include order; the methods are implemented by
 // the runtime (runtime/gpu/system.cpp).
 #pragma once

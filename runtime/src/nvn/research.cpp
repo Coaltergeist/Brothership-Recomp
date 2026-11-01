@@ -1,4 +1,4 @@
-// Tap mode research captures (NVN_PLAN Phase 7 preparation, follow-up F3):
+// Tap mode research captures:
 // what the real NVN driver gets and sends, saved for offline study. They read
 // NVN's internal formats (SDK 12.3.2, BRO), so they live in tap mode only and
 // never feed the layer.
@@ -12,7 +12,7 @@
 //   count, program, code GPU address, its guest address, control bytes, frame).
 // - Command lists: RT_NVN_CAPTURE=<first frame>:<frames> saves every list
 //   submitted with nvnQueueSubmitCommands during those frames to
-//   nvn_submits.bin (format below), for work/shader_check/replay.py.
+//   nvn_submits.bin (format below), for replaying offline.
 //
 // NVN's control memory (read from the SDK, 2026-10-15): a handle is either
 // packed — (address of the first segment entry) | (entry count << 48) | 1 —

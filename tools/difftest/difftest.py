@@ -8,7 +8,7 @@ X0-X30, SP, PC, NZCV, V0-V31, FPSR and a scratch memory window.
 Usage (from the repo root):
   tools/venv/bin/python -I tools/difftest/difftest.py extracted/exefs/main.bin
 
-Full mode (SIMD_PLAN.md Phase 0): every distinct encoding of the chosen families in several modules,
+Full mode: every distinct encoding of the chosen families in several modules,
 tested once each, with integer boundary values in the vector lanes, built with the generated code's
 compiler and flags, optionally through the lifter's SIMD emitter:
   tools/venv/bin/python -I tools/difftest/difftest.py --full --families int,move --simd --jobs 14 \
@@ -110,7 +110,7 @@ MOVE = {"mov", "movi", "mvni", "dup", "ins", "umov", "smov", "orr", "orn", "and"
 
 
 def family(enc, mnem):
-    """FP/SIMD data processing (op0 = x111) split as SIMD_PLAN.md counts it: fp, move (moves, permutes,
+    """FP/SIMD data processing (op0 = x111) split into classes: fp, move (moves, permutes,
     bitwise logic), int (the rest of integer SIMD); loads and stores (op0 = x1x0) are "mem"; everything
     else is "other"."""
     if (enc >> 25) & 5 == 4:
@@ -335,7 +335,7 @@ def random_state(rng, pc, bases, indexes, targets, text_range, integer=False, hi
             s.v[r][0] = random_half(rng)
             s.v[r][1] = random_half(rng)
     if not integer and rng.random() < 0.25:
-        # A running game's state (SIMD_PLAN Phase 4): ordinary normal floats (now and then a zero) in every lane
+        # A running game's state: ordinary normal floats (now and then a zero) in every lane
         # of the instruction's lane size, FPCR default, FPSR.IXC set, so FPX fast paths (drippu's and the
         # lifter's vectorised ones) keep results on all lanes; the other trials keep the special values.
         fbits = 64 if 64 in hint else 32
@@ -614,7 +614,7 @@ def write_report(name, results, sites, fpx=None, args=None):
                      f"reference error {c['reference error']}")
     if fpx:
         lines.append(f"FPX fast path taken {fpx[0]} times, exact fallback {fpx[1]} times")
-    census = collections.defaultdict(collections.Counter)  # SIMD_PLAN.md Phase 0.2
+    census = collections.defaultdict(collections.Counter)  # the census
     for r in results:
         if r.get("family") in ("int", "move"):
             c = census[(r["family"], r["mnemonic"])]

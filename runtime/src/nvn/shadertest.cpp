@@ -1,4 +1,4 @@
-// RT_NVN_SHADERTEST=<dir> (NVN_PLAN 7.2): translates every shader dumped in
+// RT_NVN_SHADERTEST=<dir>: translates every shader dumped in
 // tap mode (research.cpp: <hash>.ctrl, <hash>.code) with the layer's own
 // translation (shaders.cpp) and ends the run. Each stage is translated on its
 // own, without the bound state: constant-buffer reads outside c1 answer 0 and
@@ -101,7 +101,7 @@ std::string BuildComputePipeline(const TranslatedShader& t) {
     }
 }
 
-// RT_NVN_SHADERTEST_GPL=1 (SHADER_PLAN: the measurements before choosing between the run-time route and the
+// RT_NVN_SHADERTEST_GPL=1 (the measurements before choosing between the run-time route and the
 // game files): every vertex and fragment stage is also built on its own into a Vulkan pipeline library
 // (VK_EXT_graphics_pipeline_library) - vertex: pre-rasterisation shaders, fragment: fragment shader with its
 // descriptors moved to set 1, so the two need no shared binding numbers (independent sets) - and fragments
@@ -150,7 +150,7 @@ public:
         });
         // RT_NVN_SHADERTEST_PASS_CHECK=1: each stage library is built twice more - for a render pass of other
         // formats (three colour targets, other depth) and for the first pass again - to see whether the driver's
-        // cache of a library's compile depends on the render pass (SHADER_PLAN Phase 5: the files do not say
+        // cache of a library's compile depends on the render pass (the files do not say
         // which pass a stage is drawn into)
         const VkAttachmentDescription other[4] = {
             {0, VK_FORMAT_R16G16B16A16_SFLOAT, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,

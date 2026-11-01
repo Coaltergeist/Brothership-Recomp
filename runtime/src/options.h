@@ -1,11 +1,11 @@
-// The player's options (PORT_PLAN §6 B8, LAUNCHER_PLAN): every setting the start screen offers, in one table - its
+// The player's options: every setting the start screen offers, in one table - its
 // name, the values it takes, its default and what it does - and read only through Get(). A value comes from the
 // environment variable of the same name (tests, bench scripts, our play commands), else from the settings file the
 // start screen writes (settings.ini in UserDir(): lines `RT_RES=1440p`; not read by test runs - headless or
 // scripted input - unless RT_SETTINGS names it), else the default. The run logs the chosen
 // options and where each came from in one line at start (LogAll: a bug report's settings).
 //
-// Controllers are the start screen's own (its button test, LAUNCHER_PLAN Phase 2): no runtime option yet. Test and
+// Controllers are the start screen's own (its button test): no runtime option yet. Test and
 // diagnostic switches (RT_TRACE_*, RT_NVN_*, ...) are not player options and stay environment variables.
 #pragma once
 

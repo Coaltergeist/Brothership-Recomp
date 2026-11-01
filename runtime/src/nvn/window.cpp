@@ -1,4 +1,4 @@
-// NVNwindowBuilder, NVNwindow, acquire and present (NVN_PLAN 9.1, 9.2).
+// NVNwindowBuilder, NVNwindow, acquire and present.
 //
 // The layer keeps the game's window to itself: the game still creates its
 // `vi` layer and passes it as the native window, but nothing is sent there.
@@ -9,8 +9,7 @@
 // the device; the present interval is kept minus one, so it reads back as 1
 // after SetDefaults; GetTexture(i) gives 0 unless i < the texture count.
 //
-// Display model (9.2; the console's own buffer queue is being studied in
-// sdk-rea, INVESTIGATION_nvn_window.md): textures are handed out in turn
+// Display model: textures are handed out in turn
 // (0, 1, 2, 0 ... over the active ones); a presented texture is on screen
 // from the first 60 Hz vsync at least `interval` vsyncs after the previous
 // frame's (interval 0: at once), and stays until the next frame replaces it.
@@ -189,7 +188,7 @@ void Capture(u64 frame, u64 texture) {
     }
     NoteImageUse(t, ImageUse::kCapture);
     std::unique_ptr<ImageDownload> d = StartDownload(t, 0);
-    if (!d || d->size < u64{4} * d->width * d->height) { // (a scaled image: its own size, RESOLUTION_PLAN Phase 3)
+    if (!d || d->size < u64{4} * d->width * d->height) { // (a scaled image: its own size)
         Log("nvn: frame %llu: the presented texture has no image yet", (unsigned long long)frame);
         return;
     }

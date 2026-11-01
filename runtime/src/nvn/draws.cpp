@@ -1,4 +1,4 @@
-// Draws (NVN_PLAN 7.4, 7.5, 8.2).
+// Draws.
 //
 // Recording (signatures checked in BRO, 2026-10-16): DrawArrays(mode, first,
 // count), DrawArraysInstanced(mode, first, count, base instance, instances),
@@ -148,10 +148,10 @@ std::atomic<u64> g_gpu_reads{0}, g_earlier_reads{0};
 enum Phase : u32 { kTargets, kPipeline, kCbuf, kStorage, kTexel, kTextures, kImages, kVertex, kIndex, kRecord, kBook, kPhases };
 constexpr const char* kPhaseNames[kPhases] = {"targets", "pipeline", "cbufs", "storage", "texel", "textures",
                                               "images", "vertex", "index", "record", "bookkeeping"};
-// Within each phase, the parts that read guest memory (BUFFER_CACHE_PLAN Phase 0: which part a cache removes):
+// Within each phase, the parts that read guest memory (which part a cache removes):
 // the guest read, laying earlier writes over it (Overlay, KeepVisibleParts), the F9 note, the GPU copies of GPU parts;
 // the phase's rest is reported as "rest" (for texel: the view and descriptors).
-// "lookup" and "view" (HEAVY_FRAMES_PLAN Phase 2): a buffer texture's pool entry and format checks, its texel view.
+// "lookup" and "view": a buffer texture's pool entry and format checks, its texel view.
 // "page search": PageCopy looking for a block that holds the read; "write setup": ShaderWrite's slices, write-back
 // entry and device copy (its fill is timed as the parts above).
 enum Part : u32 { kGuestRead, kOverlay, kVisible, kNote, kGpuCopies, kRangeStats, kLookup, kView, kPageSearch, kWriteSetup, kParts };
@@ -472,7 +472,7 @@ void NoteRead(u64 address, u64 size, const u8* data, const std::vector<GpuPart>*
     }
 }
 
-// --- The write index (HEAVY_FRAMES_PLAN Phase 2) ---------------------------------------------------------------
+// --- The write index ---------------------------------------------------------------
 //
 // ReadAsGpuSees copies the whole read from guest memory, then lays every write of every submission in flight over
 // it (scanning each list), then drops the GPU parts later ones cover (KeepVisibleParts). In the cutscenes' chains of
@@ -753,7 +753,7 @@ bool FillAsGpuSees(Translator& t, u64 address, u64 size, const UploadRing::Slice
     return true;
 }
 
-/// Which bound textures and images are scaled (RESOLUTION_PLAN Phase 3): texture i of a stage is bit base + i of
+/// Which bound textures and images are scaled: texture i of a stage is bit base + i of
 /// words 0-3, image j bit base + j of words 4-5, each stage in its own range (shaders.h RescaleRange), so the
 /// stages of a draw, which share the push constants, never share a bit.
 struct RescaleBits {
@@ -791,7 +791,7 @@ RescaleBits::Words RescalingWords(const RescaleBits::Words& scaled) {
     return words;
 }
 
-/// RT_NVN_RANGE_STATS=1 (BUFFER_CACHE_PLAN Phase 0, a test aid): the copies Snapshot makes of guest memory, by
+/// RT_NVN_RANGE_STATS=1 (a test aid): the copies Snapshot makes of guest memory, by
 /// (address, size) with a hash of their bytes, sampled: frames 0-4 of every 60 are recorded, and the last of them is
 /// compared with the three before it (the plaza's texel ranges were mostly at new addresses each frame, 2026-10-24:
 /// a ring the game rotates?). Logged per sample ("nvn ranges: ..."): that frame's copies and bytes, its distinct
@@ -936,7 +936,7 @@ void RangeStatsNote(u64 address, u64 size, bool gpu) {
     for (const auto& [pg, ph] : page_hashes) history.back().pages[pg] = {ph, t_phase};
 }
 
-/// RT_NVN_PAGE_COPY (default on; 0: off, each read copied on its own as before - A/B): BUFFER_CACHE_PLAN Phase 0.5.
+/// RT_NVN_PAGE_COPY (default on; 0: off, each read copied on its own as before - A/B).
 bool PageCopyOn() {
     static const bool on = [] {
         const char* e = std::getenv("RT_NVN_PAGE_COPY");
@@ -948,7 +948,7 @@ bool PageCopyOn() {
 /// The guest bytes [address, address + size) as an offset into this submission's page-aligned copy of their block
 /// (Translator::spans): each page copied once per submission, when a read first needs it, instead of once per
 /// (address, size) - the heavy scenes copied ~150 MB a frame from 13-21 MB of pages, through ~1,300 different
-/// windows a frame over the same memory (BUFFER_CACHE_PLAN Phase 0). Blocks are 256 KB-aligned runs of guest memory
+/// windows a frame over the same memory. Blocks are 256 KB-aligned runs of guest memory
 /// (a read across a boundary gets a block of several); a block's room in the upload ring is reserved whole, its pages
 /// filled on demand, and a page is never written again once filled (draws recorded before may read it): a read over
 /// bytes written since their page was filled gets a new block. A block keeps every byte at its guest address mod
@@ -1080,7 +1080,7 @@ bool PageCopy(Translator& t, u64 address, u64 size, u64 need, u64 min_offset, Up
     return true;
 }
 
-// --- The buffer cache (BUFFER_CACHE_PLAN Phase 2) --------------------------------------------------------------
+// --- The buffer cache --------------------------------------------------------------
 
 /// RT_NVN_BUFFER_CACHE (default on; 0: off - every submission copies its pages, Phase 0.5); RT_NVN_BUFFER_CACHE_MB:
 /// the arena (default 512); RT_NVN_BUFFER_CACHE_CHECK=1 (test aid): a host shadow of every entry, and each served
@@ -1213,7 +1213,7 @@ bool CacheKindOn(Phase phase) {
 
 /// The guest bytes [address, address + size) from the queue's buffer cache (BuferCache): pages unchanged since they
 /// were copied (writetrack) are used as they are, the others copied again before this submission's commands (one
-/// GPU copy of each such page, queue.cpp). False: not served (see BUFFER_CACHE_PLAN Phase 2's fallbacks); the caller
+/// GPU copy of each such page, queue.cpp). False: not served; the caller
 /// copies the read for this submission alone (PageCopy). `need`, `min_offset`: as PageCopy's.
 bool CachedRead(Translator& t, u64 address, u64 size, u64 need, u64 min_offset, UploadRing::Slice& out) {
     using E = BufferCache::Entry;
@@ -1974,7 +1974,7 @@ void Draw(Translator& t, const DrawRecord& r, const UploadRing::Slice* gpu_param
         BindDescriptors(t, VK_PIPELINE_BIND_POINT_GRAPHICS, p, entries);
     }
     using namespace Shader::Backend::SPIRV;
-    // RESOLUTION_PLAN Phase 3: scaled targets (all of the draw's, BindTargets) - fragment coordinates back in the
+    // scaled targets (all of the draw's, BindTargets) - fragment coordinates back in the
     // game's units (down_factor), viewport and scissor in the targets' own; the render area (drippu's position pass
     // turns pixel positions into clip space by it) stays the game's size
     const bool scaled = targets.scale_n != 4;

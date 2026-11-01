@@ -17,8 +17,7 @@ constexpr u32 kStages = 6;
 /// One stage of a program: what nvnProgramSetShaders keeps from its
 /// NVNshaderData. The game may free the control section afterwards, so the
 /// fields are copies. Layout of the control section (format 0x120/0xb, SDK
-/// 8.2.0 and 12.3.2), measured on 1,579 shaders of Brothership (NVN_PLAN
-/// Phase 7, "Known before Phase 7").
+/// 8.2.0 and 12.3.2), measured on 1,579 shaders of Brothership.
 struct ProgramStage {
     Stage stage{};
     u64 code = 0;             // GPU address of the stage's code memory (NVN's debug tag at +0)

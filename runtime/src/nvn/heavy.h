@@ -1,4 +1,4 @@
-// RT_PROFILE_HEAVY (HEAVY_FRAMES_PLAN Phase 0): what a heavy submission's translation and GPU time are made of.
+// RT_PROFILE_HEAVY: what a heavy submission's translation and GPU time are made of.
 //
 // RT_PROFILE_HEAVY=<ms> (1: 12 ms) with RT_TRACE_WAITS: every traced submission is profiled while it is
 // translated - CPU time per record, the draw / dispatch phases of RT_PROFILE_DRAWS (also turned on, without its
@@ -11,7 +11,7 @@
 //   heavy_stretches.csv   one row per stretch of kCheckpointRecords records: CPU end, GPU time, open pass, ops
 //   heavy_dispatches.csv  one row per dispatch: CPU / driver / GPU time, bytes in, written back and changed
 // The submissions below <ms> are summed per second of uptime into heavy_subs.csv (sub = s<second>), the
-// same columns, for comparison. tools/heavy_report.py reads the three files.
+// same columns, for comparison.
 #pragma once
 
 #include "nvn.h"

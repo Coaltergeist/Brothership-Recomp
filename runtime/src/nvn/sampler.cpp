@@ -1,4 +1,4 @@
-// NVNsamplerBuilder, NVNsampler and NVNsamplerPool (NVN_PLAN 6.5, 6.6: the
+// NVNsamplerBuilder, NVNsampler and NVNsamplerPool (the
 // state only; Vulkan samplers come with submission).
 //
 // A sampler builder holds its fields inline in the game's storage, in 48
@@ -231,7 +231,7 @@ NVN_PROC(nvnSamplerPoolRegisterSamplerBuilder, void, u64 pool, s32 id, u64 build
     Register(pool, id, Load<SamplerState>(builder));
 }
 
-// --- Vulkan samplers (NVN_PLAN 7.5) ---------------------------------------------------------------------
+// --- Vulkan samplers ---------------------------------------------------------------------
 
 namespace {
 

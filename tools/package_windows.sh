@@ -1,10 +1,10 @@
 #!/bin/bash
-# The Windows download (RELEASE_PLAN Phase 1): dist/BrothershipRecomp-Windows.zip with
+# The Windows download: dist/BrothershipRecomp-Windows.zip with
 #   BrothershipRecomp.exe  the runtime (nxrt) without game code, no console window, Microsoft's C/C++ runtime linked
 #                       in (/MT): built here in build/win/release (NXRT_GAME=module, NXRT_CONSOLE=OFF); it starts itself
 #                       again by its own path (the seed stage, the restart into the game), so the name is free
 #   background.png      the start screen's picture, if public/background.png exists (art of our own only, never the
-#                       game's: PORT_PLAN §6.1)
+#                       game's)
 #   tools/              the game builder's tools (tools/make_toolchain.sh: lifter, clang + lld-link + headers, the
 #                       module's sources, the 60 fps patch, LLVM's licence)
 #   LICENSE, NOTICE.md  public/ (GPL-3.0-or-later; every library and the 60 fps patch credited)

@@ -1,7 +1,7 @@
 // The host operating system as the runtime uses it: guest memory, host files,
 // thread ids and names, host stack dumps, whole-line logging. Everything else
 // in runtime/src is portable C++; one implementation of this file per OS
-// (posix.cpp today; windows.cpp for PORT_PLAN Phase 4).
+// (posix.cpp, windows.cpp).
 //
 // Not covered here yet, for the Windows port:
 // - GNU extensions (__atomic builtins, the cmpxchg16b asm in rt.cpp, format
@@ -26,8 +26,8 @@ void InitProcess();
 //
 // The guest address space is one host reservation (the "window") at a fixed
 // host address. Only ranges the guest has mapped are accessible (CommitWindow);
-// everything else faults, so a stray access is reported instead of reading zero
-// (old_plans/FASTMEM_PLAN.md Phase 1). Pages are private and read as zero until written,
+// everything else faults, so a stray access is reported instead of reading zero.
+// Pages are private and read as zero until written,
 // except those aliased onto the device backing (MapDeviceView), which the GPU
 // reads as "physical" memory.
 
@@ -50,7 +50,7 @@ bool MapDeviceView(uint8_t* p, size_t size, uint64_t offset);
 /// Turns [p, p + size) of the window back into private zero pages.
 void UnmapDeviceView(uint8_t* p, size_t size);
 
-/// Write tracking (writetrack.cpp, BUFFER_CACHE_PLAN Phase 1): makes [p, p + size) of the window read-only /
+/// Write tracking (writetrack.cpp): makes [p, p + size) of the window read-only /
 /// read-write again. False when the host refuses (Windows: a range across separately mapped views, or memory
 /// that is not a mapped view: the caller tries page by page).
 bool ProtectReadOnly(uint8_t* p, size_t size);
@@ -100,11 +100,12 @@ private:
 void SleepUntil(std::chrono::steady_clock::time_point deadline);
 inline void SleepFor(std::chrono::nanoseconds duration) { SleepUntil(std::chrono::steady_clock::now() + duration); }
 
-/// Where stdout and stderr go when the program has none (Windows, a build without a console window - RELEASE_PLAN:
+/// Where stdout and stderr go when the program has none (Windows, a build without a console window,
 /// started by a double-click): the console of the terminal it was started from, if any, else `log_file` (the previous
-/// one kept as <name>.old.log). Output that already goes somewhere (a console, a redirect: the bench scripts) is left
-/// alone. POSIX: nothing.
-void AttachOutput(const std::string& log_file);
+/// one kept as <name>.old.log; `continuing`: added to instead - a run that carries on its starter's, as the start
+/// screen's hand-over to `--seed` and back, ui/seed.h). Output that already goes somewhere (a console, a redirect:
+/// the bench scripts) is left alone. POSIX: nothing.
+void AttachOutput(const std::string& log_file, bool continuing = false);
 
 /// A child process (the game builder's tools, build/build.h): `args` (UTF-8; args[0] the program's path), its stdout and
 /// stderr to the file `log` (made or emptied), no stdin, no window of its own (Windows: CREATE_NO_WINDOW, so a program

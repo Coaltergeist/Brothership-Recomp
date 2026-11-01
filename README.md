@@ -22,7 +22,7 @@ it runs). The Steam Deck comes next.
 4. **Build**, then **Play**.
 
 Settings, saves, the build and the caches live in `%LOCALAPPDATA%\brothership-recomp`. To report a problem,
-attach `nxrt.log` and `build\build.log` from there (they never contain your keys).
+attach `nxrt.log`, `build\build.log` and `build\unpack.log` from there (they never contain your keys).
 
 ## No game content
 

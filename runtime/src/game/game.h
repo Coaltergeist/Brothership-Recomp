@@ -1,4 +1,4 @@
-// The game module's interface (BUILD_PLAN Phase 1): what the runtime gives the lifted code (NxHost) and what the
+// The game module's interface: what the runtime gives the lifted code (NxHost) and what the
 // lifted code gives the runtime (NxGame), in one exported function, nx_game. The lifted code's own names - rt_jump,
 // rt_svc, rt_break, recomp_lookup, rt_trace_pc - are defined beside it (entry.c) and forward to NxHost, so the
 // generated files are the same in both builds:

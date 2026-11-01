@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M1 on Windows (PORT_PLAN Phase 4): the runtime cross-built in WSL (tools/cross) with the code
+# M1 on Windows: the runtime cross-built in WSL (tools/cross) with the code
 # tests/m1/run.sh lifted (run that first), run on Windows from \\wsl.localhost through WSL interop,
 # then the same checks as run.sh.
 #

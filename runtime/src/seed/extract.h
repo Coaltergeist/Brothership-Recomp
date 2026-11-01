@@ -1,8 +1,8 @@
-// The game's shader stages from its own files, for the seed (RELEASE_PLAN Phase 3; tools/shaderseed/shaderseed.py,
-// the reference, did the same from retoc's 23 GB unpack). Unreal 4.27 ships every shader precompiled: each stage an
+// The game's shader stages from its own files, for the seed (a
+// reference script did the same from retoc's 23 GB unpack). Unreal 4.27 ships every shader precompiled: each stage an
 // FShaderMapResourceCode entry (int32 size, LZ4 bytes, int32 unpacked size, uint8 frequency) whose unpacked blob starts
-// with "LSLGS" and holds the stage's NVN code memory, its 0x800-byte control section and its NVIDIA assembly text
-// (old_plans/SHADER_PLAN.md §9). Material shaders are in the IoStore containers' chunks (.utoc + .ucas), the global
+// with "LSLGS" and holds the stage's NVN code memory, its 0x800-byte control section and its NVIDIA assembly text.
+// Material shaders are in the IoStore containers' chunks (.utoc + .ucas), the global
 // ones in the .pak's GlobalShaderCache; both Oodle-compressed (seed/oodle.h). Read in place, chunk by chunk, on
 // several threads: nothing but the stages is written.
 #pragma once

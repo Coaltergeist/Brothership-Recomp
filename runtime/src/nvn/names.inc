@@ -1,6 +1,6 @@
 // The NVN entry points of SDK 3.5.0, 8.2.0 and 12.3.2 (their union, sorted): the
 // names nvnDeviceGetProcAddress answers. Generated from the three SDKs' own lookup
-// tables (work/compat/compare/names_corrected.tsv, ARCHITECTURE §11).
+// tables.
 "nvnBlendStateGetAdvancedMode",
 "nvnBlendStateGetAdvancedNormalizedDst",
 "nvnBlendStateGetAdvancedOverlap",

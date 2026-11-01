@@ -1,4 +1,4 @@
-// The NVN tap (NVN_PLAN Phase 2): RT_NVN_TAP=1 logs every NVN call while the
+// The NVN tap: RT_NVN_TAP=1 logs every NVN call while the
 // game's own NVN driver (lifted) keeps rendering.
 //
 // The game gets every NVN function from nvnBootstrapLoader or
@@ -26,7 +26,7 @@ namespace rt::nvn::tap {
 /// Installs the tap if RT_NVN_TAP is set. After hle::Init.
 void Init();
 
-/// Shadow oracle (NVN_PLAN 2.4): after each tapped call of `name`, `fn` gets
+/// Shadow oracle: after each tapped call of `name`, `fn` gets
 /// the registers before and after the real function, to run an own
 /// implementation on `before` and report any difference. For functions that
 /// only compute from their arguments (sizes, alignments, handles, getters).

@@ -1,4 +1,4 @@
-// Binds (NVN_PLAN 7.5, 8.1): state objects, the program, handles and buffers.
+// Binds: state objects, the program, handles and buffers.
 //
 // Recording: NVN reads state objects (and a graphics program's pre-built
 // words) when it records, so the records keep copies. Binds for the compute
@@ -6,7 +6,7 @@
 // (program, 16 bytes), 8-11 (texture, separate texture, separate sampler,
 // image: 16 bytes), 12-13 (uniform, storage buffer: 24 bytes) — the layer
 // writes control records of the same sizes, so the game's control memory is
-// used as by NVN (sdk-rea shader follow-up F1). A compute program is read at
+// used as by NVN. A compute program is read at
 // submit, as NVN does.
 //
 // Records are packed to fit those sizes: a handle as its low 32 bits plus

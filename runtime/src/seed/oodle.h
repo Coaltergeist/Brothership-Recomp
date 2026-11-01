@@ -1,4 +1,4 @@
-// Oodle decompression for the shader seed (RELEASE_PLAN Phase 3). The game's archives - the .pak's global shader
+// Oodle decompression for the shader seed. The game's archives - the .pak's global shader
 // cache, the IoStore container's packages - are Oodle-compressed; they are decoded with ooz (third_party/ooz, powzix,
 // GPL-3.0-or-later), checked byte-identical to Epic's oo2core on the game's GlobalShaderCache (39 Kraken blocks,
 // 2026-11-01). Epic's library is never needed or shipped.

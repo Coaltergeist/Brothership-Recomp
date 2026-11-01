@@ -1,4 +1,4 @@
-# CMake toolchain: Windows x86-64 executables built in WSL (PORT_PLAN Phase 4).
+# CMake toolchain: Windows x86-64 executables built in WSL.
 #
 #   cmake -S <src> -B build/win/<name> -G Ninja \
 #         -DCMAKE_TOOLCHAIN_FILE=$PWD/tools/cross/windows-clang-cl.cmake

@@ -1,4 +1,4 @@
-// Render state and clears (NVN_PLAN 8.1, 8.3).
+// Render state and clears.
 //
 // Recording (signatures checked in BRO, 2026-10-16): SetRenderTargets(count,
 // colours, colour views, depth, depth view) — NVN reads the textures and views
@@ -259,7 +259,7 @@ const TextureImage::Attachment& AttachmentOf(TextureImage& img, const RenderTarg
             .subresourceRange = {img.aspect, level, 1, base, layers},
         });
         a.extent = {std::max(1u, b.width >> level), b.target == 0 || b.target == 3 ? 1u : std::max(1u, b.height >> level)};
-        if (img.Scaled()) a.extent = {img.UpSize(a.extent.width), img.UpSize(a.extent.height)}; // RESOLUTION_PLAN Phase 3
+        if (img.Scaled()) a.extent = {img.UpSize(a.extent.width), img.UpSize(a.extent.height)}; // scaled targets
         a.layers = layers;
         const VkImageView view = *a.view;
         a.framebuffer = logical.CreateFramebuffer({

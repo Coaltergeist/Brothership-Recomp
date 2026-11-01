@@ -1,4 +1,4 @@
-// The internal resolution of the run (resolution.h, RESOLUTION_PLAN Phase 1).
+// The internal resolution of the run (resolution.h).
 #include "resolution.h"
 
 #include <array>

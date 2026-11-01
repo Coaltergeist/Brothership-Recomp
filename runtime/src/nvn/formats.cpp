@@ -1,4 +1,4 @@
-// NVN texture formats (NVN_PLAN 6.1): bytes per block and block size per NVN
+// NVN texture formats: bytes per block and block size per NVN
 // format id (the ids are the same in SDK 3.5.0 to 12.3.2).
 //
 // The sizes follow LASRecomp's formats.c (github.com/peiikai/LASRecomp,
@@ -65,7 +65,7 @@ constexpr std::array<FormatInfo, 0x9d> MakeTable() {
         t[0x79 + k] = B(16, astc[k][0], astc[k][1]);
         t[0x87 + k] = B(16, astc[k][0], astc[k][1]);
     }
-    // 0x95-0x9c from BRO's own format table (.data 0xd777c8, sdk-rea dump; its sizes agree with this table
+    // 0x95-0x9c from BRO's own format table (.data 0xd777c8; its sizes agree with this table
     // elsewhere): four 16-bit formats (0x98: 5-5-5-1), then BGRX8, BGRA8, BGRX8 sRGB, BGRA8 sRGB — one id
     // later than LASRecomp's table (which has 0x98 = BGRX8). The window code agrees: it groups 0x9a with 0x9c.
     put(0x95, 0x98, C(2));

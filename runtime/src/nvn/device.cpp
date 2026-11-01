@@ -1,5 +1,4 @@
-// NVNdevice and its builder, and the layer's Vulkan device
-// (NVN_PLAN 3.4–3.6).
+// NVNdevice and its builder, and the layer's Vulkan device.
 #include "heavy.h"
 #include "render.h"
 #include "vk.h"
@@ -152,7 +151,7 @@ NVN_PROC(nvnDeviceInstallDebugCallback, void, u64 device, u64 callback, u64 data
     d->debug_data = data;
 }
 NVN_PROC(nvnDeviceGenerateDebugDomainId, s32, u64 device, u64 name) { return ++g_debug_domains; }
-// Removed after SDK 8.2: empty there (ARCHITECTURE §11).
+// Removed after SDK 8.2: empty there.
 NVN_PROC(nvnDeviceApplyDeferredFinalizes, void, u64 device, s32 age) {}
 NVN_PROC(nvnDeviceIsExternalDebuggerAttached, bool, u64 device) { return false; }
 NVN_PROC(nvnDeviceGetCurrentTimestampInNanoseconds, u64, u64 device) {

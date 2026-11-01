@@ -1,4 +1,4 @@
-// The game module's C library (BUILD_PLAN Phase 2): the few functions the lifted code and drippu's recomp_runtime.c
+// The game module's C library: the few functions the lifted code and drippu's recomp_runtime.c
 // name, for a module built without one (tools/build_game.sh; freestanding/README.txt). Module builds only: the
 // static build links the real C library.
 //

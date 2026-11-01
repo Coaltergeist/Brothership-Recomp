@@ -32,7 +32,7 @@ std::vector<PatchFile> LoadPatches(const std::string& path);
 /// initialised bytes. Returns a report: a summary line per applied file, then one line per write.
 std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Image>& modules);
 
-/// A write of a mod switched at run time (--mod, PORT_PLAN B2): recorded, not applied to the lifted bytes. The
+/// A write of a mod switched at run time (--mod): recorded, not applied to the lifted bytes. The
 /// runtime writes it into the loaded image when the mod is on, and the lift carries both versions of each code
 /// word it changes.
 struct ModWrite {

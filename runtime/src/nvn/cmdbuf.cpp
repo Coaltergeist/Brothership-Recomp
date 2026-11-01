@@ -1,5 +1,4 @@
-// NVNcommandBuffer: command and control memory, recording and command lists
-// (NVN_PLAN 5.1).
+// NVNcommandBuffer: command and control memory, recording and command lists.
 //
 // The game gives a command buffer two kinds of memory and an out-of-memory
 // callback. NVN writes GPU methods into command memory (a range of a memory

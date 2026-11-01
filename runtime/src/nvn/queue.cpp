@@ -1,11 +1,11 @@
-// NVNqueue and NVNsync: submission, syncs and write-backs (NVN_PLAN 5.3-5.6),
+// NVNqueue and NVNsync: submission, syncs and write-backs,
 // and the queue builder.
 //
 // QueueSubmitCommands translates the submitted command lists into one Vulkan
 // command buffer, on the submitting thread (principle 3), and submits it with
 // the queue's next timeline-semaphore value. A submission retires once Vulkan
-// has finished it: its write-backs (counter reports so far; NVN_PLAN 5.0 rule
-// 3) are written to guest memory first, then the queue's retired value moves
+// has finished it: its write-backs (counter reports so far)
+// are written to guest memory first, then the queue's retired value moves
 // on. A sync is (queue, value) and is signaled when the queue's retired value
 // reaches it, so whoever sees a sync signaled sees the submission's writes.
 // Retiring happens whenever the layer looks: at each submission, wait and
@@ -251,7 +251,7 @@ struct Queue : Object {
     std::condition_variable work;
     bool stopping = false;
     std::thread retirer;
-    std::shared_ptr<BufferCache> cache; // BUFFER_CACHE_PLAN Phase 2 (draws.cpp), made at the first submission
+    std::shared_ptr<BufferCache> cache; // the buffer cache (draws.cpp), made at the first submission
     bool cache_made = false;
 };
 
@@ -632,8 +632,8 @@ size_t SplitMinTail() {
 /// `waits_in`: other queues' syncs it waits for (a later part waits for them again: harmless, they are
 /// reached); `t0`, `t_locked`: when the call began and took q->mu (RT_TRACE_PRESENT, RT_TRACE_WAITS).
 /// RT_TRACE_WAITS: the translation time of a traced submission by record type, summed over each second of uptime and
-/// logged once it is over ("nvn translate: ..."), to see what a heavy scene's translation is made of (BUFFER_CACHE_PLAN
-/// Phase 0; the per-op timer costs ~20 ns a record).
+/// logged once it is over ("nvn translate: ..."), to see what a heavy scene's translation is made of
+/// (the per-op timer costs ~20 ns a record).
 void TranslateSecond(const std::map<Op, std::pair<u64, u32>>& op_ns, u64 translate_ns, size_t records) {
     static std::mutex mu;
     static std::map<Op, std::pair<u64, u64>> sum;
@@ -662,7 +662,7 @@ void TranslateSecond(const std::map<Op, std::pair<u64, u32>>& op_ns, u64 transla
     total_ns += translate_ns, total_records += records, ++submissions;
 }
 
-/// RT_NVN_CUT_MS=<ms> (default 4; 0: off, A/B): HEAVY_FRAMES_PLAN Phase 1. A part whose translation has taken
+/// RT_NVN_CUT_MS=<ms> (default 4; 0: off, A/B). A part whose translation has taken
 /// that long ends at the next record after which no render pass is open, is submitted, and the submission goes on
 /// in a new part: the GPU starts on it while the rest is translated (the cutscenes' ~975-dispatch frames: the GPU
 /// waited ~100 ms for the whole translation, then needed ~70 ms). Light submissions (~1 ms) never reach it.

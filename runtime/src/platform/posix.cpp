@@ -159,7 +159,7 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
     std::this_thread::sleep_until(deadline);
 }
 
-void AttachOutput(const std::string&) {}
+void AttachOutput(const std::string&, bool) {}
 
 std::string ExecutablePath() {
     std::error_code ec;

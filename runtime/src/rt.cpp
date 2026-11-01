@@ -6,6 +6,7 @@
 #include "hle.h"
 #include "mods.h"
 #include "ui/start.h"
+#include "ui/seed.h"
 #include "options.h"
 #include "nvn/layer.h"
 #include "nvn/tap.h"
@@ -33,8 +34,8 @@
 extern "C" {
 }
 
-// The lift's memory mode: nxrecomp's direct memory (the default) puts guest memory at a fixed host address
-// (old_plans/FASTMEM_PLAN.md Phase 2), NxGame::direct_base; 0: a checked lift.
+// The lift's memory mode: nxrecomp's direct memory (the default) puts guest memory at a fixed host address,
+// NxGame::direct_base; 0: a checked lift.
 static unsigned long long LiftDirectBase() { return rt::Game().direct_base; }
 
 // Mods switched at run time: `nxrecomp --mod`'s table (the same layout in nx_table.c); a lift without mods has none.
@@ -695,7 +696,7 @@ void Memory::MarkGpuCached(u64 va, u64 size, bool cached) {
             static std::atomic<bool> warned{false};
             if (!warned.exchange(true)) {
                 Log("memory: WARNING: video_core caches guest page 0x%llx, but the direct lift does not report CPU "
-                    "writes to it (old_plans/FASTMEM_PLAN.md Phase 4)", (unsigned long long)(page << 12));
+                    "writes to it", (unsigned long long)(page << 12));
             }
         }
         // Fastmem: a page entering or leaving the GPU caches switches between the
@@ -911,7 +912,7 @@ extern "C" void rt_host_break(GuestContext*, uint32_t imm, uint64_t pc) {
 
 // --- Startup -------------------------------------------------------------------
 
-// The exefs mods RT_MODS enables (mods.h; nxrecomp --mod, PORT_PLAN B2) switched on and their writes put into the
+// The exefs mods RT_MODS enables (mods.h; nxrecomp --mod) switched on and their writes put into the
 // loaded image, before any guest code runs (as Atmosphère's loader patches an NSO before rtld relocates it). In
 // table order, so a later mod's bytes win where two overlap, as its lifted word does (the lifter's
 // ModdedInstruction).
@@ -959,8 +960,12 @@ static void GameEnv(bool own_romfs, bool own_npdm) {
         setenv(name, value.c_str(), 1);
 #endif
     };
-    if (own_romfs) set("RT_ROMFS", paths.romfs);
-    if (own_npdm) set("RT_NPDM", paths.npdm);
+    // only once they exist: settings that name the game files before the build folder has them (a first Build not yet
+    // finished, the build folder deleted) made the NVN layer read a missing NPDM and stop (2026-11-01)
+    std::error_code ec;
+    const auto exists = [&ec](const std::string& p) { return !p.empty() && std::filesystem::exists(std::filesystem::path(p), ec); };
+    if (own_romfs && exists(paths.romfs)) set("RT_ROMFS", paths.romfs);
+    if (own_npdm && exists(paths.npdm)) set("RT_NPDM", paths.npdm);
     if (const char* c = std::getenv("RT_PIPELINE_CACHE"); !c || !*c) {
         set("RT_PIPELINE_CACHE", (std::filesystem::path(options::UserDir()) / "cache").string());
     }
@@ -970,11 +975,17 @@ static void GameEnv(bool own_romfs, bool own_npdm) {
 }
 
 int main(int argc, char** argv) {
-    // A build without a console window (RELEASE_PLAN) started by a double-click: the log to the per-user folder
-    platform::AttachOutput((std::filesystem::path(options::UserDir()) / "nxrt.log").string());
-    // the positional ones; --play: no start screen (ui/start.h); --build: build the game module and end (build.h)
+    // A build without a console window started by a double-click: the log to the per-user folder (added
+    // to by the runs of the start screen's hand-over, --seed and --after-seed: one log for the whole Build)
+    bool continuing = false;
+    for (int i = 1; i < argc; ++i) {
+        continuing |= std::strcmp(argv[i], "--seed") == 0 || std::strcmp(argv[i], "--after-seed") == 0;
+    }
+    platform::AttachOutput((std::filesystem::path(options::UserDir()) / "nxrt.log").string(), continuing);
+    // the positional ones; --play: no start screen (ui/start.h); --build: build the game module and end (build.h);
+    // --seed: Build's shader steps in a run of their own, then the start screen again with --after-seed (ui/seed.h)
     std::vector<const char*> args;
-    bool build_only = false;
+    bool build_only = false, seed_only = false, after_seed = false;
     // --extract-shaders <romfs> <out>: the game's shader stages for the seed (seed/extract.h), then end
     if (argc == 4 && std::strcmp(argv[1], "--extract-shaders") == 0) {
         std::atomic<bool> cancel{false};
@@ -998,6 +1009,8 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--build") == 0) build_only = true;
+        else if (std::strcmp(argv[i], "--seed") == 0) seed_only = true;
+        else if (std::strcmp(argv[i], "--after-seed") == 0) after_seed = true;
         else if (std::strcmp(argv[i], "--play") != 0) args.push_back(argv[i]);
     }
 #ifdef NXRT_GAME_MODULE
@@ -1005,10 +1018,11 @@ int main(int argc, char** argv) {
     // module is loaded once Play is chosen (a rebuild on the start screen can still replace it)
     const bool player = args.empty();
     if (build_only) return build::Command();
+    if (seed_only) return ui::RunSeed();
 #else
     const bool player = false;
-    if (build_only) {
-        std::fprintf(stderr, "--build: this runtime has the game built in (NXRT_GAME=static)\n");
+    if (build_only || seed_only) {
+        std::fprintf(stderr, "%s: this runtime has the game built in (NXRT_GAME=static)\n", build_only ? "--build" : "--seed");
         return 2;
     }
 #endif
@@ -1069,12 +1083,12 @@ int main(int argc, char** argv) {
     diag::Start();
     options::LogAll();
     window::Open(); // early: a missing display fails before the image loads
-    if (ui::Wanted(argc, argv)) { // the start screen (LAUNCHER_PLAN): returns on Play, with the settings it saved
-        ui::Run(player ? build::BuiltMods() : BuiltMods(), player);
+    if (ui::Wanted(argc, argv)) { // the start screen: returns on Play, with the settings it saved
+        ui::Run(player ? build::BuiltMods() : BuiltMods(), player, after_seed);
         window::Reapply();
         options::LogAll();
         // A first install: the start screen ran before the game files existed, so the NVN layer opened caches with no
-        // program id - the seed's went unused for the whole session (2026-11-01, the user's first play). Start again
+        // program id - the seed's went unused for the whole session (2026-11-01, a first install's first play). Start again
         // straight into the game (--play), which opens the seeded ones.
         if (player && !caches_named) {
             GameEnv(own_romfs, own_npdm);

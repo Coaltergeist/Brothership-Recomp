@@ -1,5 +1,5 @@
 #!/bin/bash
-# The game builder's tools, as a release ships them (BUILD_PLAN Phase 3; runtime/src/build/build.h): <out>/tools/,
+# The game builder's tools, as a release ships them (runtime/src/build/build.h): <out>/tools/,
 # beside nxrt, where the builder looks for them.
 #   nxrecomp[.exe]               the lifter (Windows: cross-built here with tools/cross, static C runtime)
 #   llvm/bin/                    clang + the linker - Windows: clang.exe + lld-link.exe from tools/llvm-win (the

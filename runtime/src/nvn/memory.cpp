@@ -1,12 +1,11 @@
-// NVNmemoryPool and NVNbuffer, their builders, and GPU addresses (NVN_PLAN
-// Phase 4).
+// NVNmemoryPool and NVNbuffer, their builders, and GPU addresses.
 //
 // A memory pool is game memory (MemoryPoolBuilderSetStorage). Its GPU address
 // is that memory's guest address: the game treats GPU addresses as numbers it
 // adds offsets to and hands back, so any 1:1 numbering works (LASRecomp does
 // the same), and one interval map turns every address a command carries into
 // (pool, offset). The data itself stays in guest memory; how the GPU sees it
-// (copies at submit, written back on completion) is Phase 5's (NVN_PLAN 5.0).
+// (copies at submit, written back on completion) is Phase 5's.
 // Virtual pools (MemoryPoolMapVirtual) are not implemented: no game so far
 // uses them.
 #include "nvn.h"

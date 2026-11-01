@@ -1,4 +1,4 @@
-// NVNtexturePool (NVN_PLAN 6.5): so far the pool itself. Textures, their
+// NVNtexturePool: so far the pool itself. Textures, their
 // registration and views follow in Phase 6; until then those calls stop the run.
 //
 // A texture pool is a host table of texture entries by id; NVN also writes
@@ -175,10 +175,9 @@ NVN_PROC(nvnTextureBuilderGetPackagedTextureLayout, u32, u64 builder, u64 out) {
     return tb.layout_set;
 }
 
-// --- Storage size and alignment (NVN_PLAN 6.2) -------------------------------------------
+// --- Storage size and alignment -------------------------------------------
 // NVN's rules, checked against the real driver's answers for every texture of
-// the title route (1,088 of 1,088, tap mode; work/texture_oracle/model.py is
-// the same model in Python):
+// the title route (1,088 of 1,088, tap mode):
 // - Block-linear: GOBs of 64 bytes x 8 rows. Block height (log2 GOBs) from
 //   1.5 x the level-0 height in format blocks: < 16 -> 0, < 32 -> 1, < 64 -> 2,
 //   < 128 -> 3, else 4 (SDK 0x5a5ef0); 3D textures: block height 0 and block
@@ -325,7 +324,7 @@ Storage StorageOrStop(u64 builder) {
 NVN_PROC(nvnTextureBuilderGetStorageSize, u64, u64 builder) { return StorageOrStop(builder).size; }
 NVN_PROC(nvnTextureBuilderGetStorageAlignment, u32, u64 builder) { return StorageOrStop(builder).alignment; }
 
-// --- TextureView (NVN_PLAN 6.7) -----------------------------------------------------------------
+// --- TextureView -----------------------------------------------------------------
 // Inline in the game's NVNtextureView (texture.h); a property counts only once
 // set, and each getter answers whether it was (as the SDK's).
 
@@ -421,7 +420,7 @@ ViewArg ReadView(u64 view) {
     return a;
 }
 
-// --- Texture (NVN_PLAN 6.5, 6.7) -----------------------------------------------------------------
+// --- Texture -----------------------------------------------------------------
 // The host keeps the builder's settings, the storage and the GPU address (the
 // pool's storage address + offset). NVN's Finalize does nothing, so the game
 // may initialise a texture's storage again without finalising it: the host
@@ -564,7 +563,7 @@ NVN_PROC(nvnTextureGetSwizzle, void, u64 texture, u64 r, u64 g, u64 b, u64 a) {
     hle::WriteGuest<u32>(a, s.settings.swizzle[3]);
 }
 
-// --- Pool registration (NVN_PLAN 6.5) ---------------------------------------------------------------
+// --- Pool registration ---------------------------------------------------------------
 
 namespace {
 void RegisterInPool(u64 pool, s32 id, u64 texture, u64 view, bool image) {
@@ -646,7 +645,7 @@ NVN_PROC(nvnCommandBufferCopyTextureToTexture, void, u64 cmdbuf, u64 src, u64 sr
     Record(c, cmdbuf, Op::kCopyTextureToTexture, r);
 }
 
-// --- Tap mode: the real driver's storage sizes (NVN_PLAN 6.2) ---------------------------
+// --- Tap mode: the real driver's storage sizes ---------------------------
 // After each nvnTextureBuilderGetStorageSize / GetStorageAlignment of the real
 // driver, the builder's settings are read back through the SDK's own getters
 // and each new combination is appended, with the driver's answer, to

@@ -11,7 +11,7 @@ if (NOT GEN_DIR)
 endif()
 
 file(GLOB GEN_FUNCS "${GEN_DIR}/funcs_*.c")
-# The lifted code (BUILD_PLAN, src/game/game.h): NXRT_GAME=static links it into nxrt; module builds nxrt without it -
+# The lifted code (src/game/game.h): NXRT_GAME=static links it into nxrt; module builds nxrt without it -
 # the game module (nxgame.dll / libnxgame.so) is built by tools/build_game.sh, freestanding, the way a player's
 # builder builds it, and loaded at start. Both with src/game/entry.c, the names the lifted code calls and its one
 # export, nx_game.
@@ -38,7 +38,7 @@ if (NXGEN_OPT)
 endif()
 # The memory-access runtime (one file, called by every guest load and store) at -O2 even when the
 # rest is built at -O1: with gcc its small helpers then inline (~5 % less time in the opening movie's
-# decoder threads, 7 s of build); clang-cl measured unchanged (ARCHITECTURE 5.6). The FP helper shards
+# decoder threads, 7 s of build); clang-cl measured unchanged. The FP helper shards
 # at -O2 measured no faster (BUILD_TIME 3a).
 if (MSVC)
     set(NXGEN_RUNTIME_OPT_DEFAULT "/clang:-O2")
@@ -51,7 +51,7 @@ if (NXGEN_RUNTIME_OPT)
     set_source_files_properties("${GEN_DIR}/recomp_runtime.c" PROPERTIES COMPILE_OPTIONS "${NXGEN_RUNTIME_OPT_LIST}")
 endif()
 # Host ISA for the generated code: SSE4.2 on x86-64 (any CPU Windows 11 runs on has it; the lifted
-# SIMD code uses pmovzx, pshufb, ptest; SIMD_PLAN.md). Empty for other hosts.
+# SIMD code uses pmovzx, pshufb, ptest). Empty for other hosts.
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     set(NXGEN_ARCH_DEFAULT "-msse4.2")
 else()
@@ -62,7 +62,7 @@ if (NXGEN_ARCH)
     separate_arguments(NXGEN_ARCH_LIST UNIX_COMMAND "${NXGEN_ARCH}")
     target_compile_options(nxgen PRIVATE ${NXGEN_ARCH_LIST})
 endif()
-# SIMD_PLAN Phase 4 step 0: count drippu's FP fast path (src/fpx_probe.h, force-included; its own build directory).
+# count drippu's FP fast path (src/fpx_probe.h, force-included; its own build directory).
 option(RT_FPX_PROBE "Count drippu's FP fast-path hits and misses (slower; for measurement)" OFF)
 if (RT_FPX_PROBE)
     if (MSVC)
@@ -74,10 +74,10 @@ endif()
 endif() # (NXRT_GAME static: the lifted code's compile options above)
 # The generated code is meant for clang (clang-cl on Windows; on Linux configure a fresh build
 # directory with -DCMAKE_C_COMPILER=$PWD/tools/llvm/bin/clang): GCC builds it correctly but turns
-# its vector code into much slower sequences (SIMD_PLAN.md §2).
+# its vector code into much slower sequences.
 if (CMAKE_C_COMPILER_ID STREQUAL "GNU")
     message(WARNING "The generated code is built with GCC: correct, but its SIMD is slower than with clang "
-                    "(configure a fresh build directory with -DCMAKE_C_COMPILER=<clang>; SIMD_PLAN.md)")
+                    "(configure a fresh build directory with -DCMAKE_C_COMPILER=<clang>)")
 endif()
 
 # The host OS (src/platform/platform.h): one implementation per platform.
@@ -89,7 +89,7 @@ endif()
 file(GLOB RT_SERVICES "${CMAKE_CURRENT_SOURCE_DIR}/src/services/*.cpp")
 find_package(Threads REQUIRED)
 
-# Windows (PORT_PLAN Phase 4): what drippu's build defines there, for the runtime too (windows.h reaches it
+# Windows: what drippu's build defines there, for the runtime too (windows.h reaches it
 # through drippu's Vulkan headers: no min/max macros, no rarely used headers).
 if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE _SCL_SECURE_NO_WARNINGS NOMINMAX
@@ -112,13 +112,13 @@ set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 # Linux needs the X11 -dev packages SDL uses (README "Building the runtime").
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/SDL ${CMAKE_CURRENT_BINARY_DIR}/sdl EXCLUDE_FROM_ALL)
 
-# The start screen's UI (LAUNCHER_PLAN): Dear ImGui (the submodule, a release tag) with its SDL3 and Vulkan
-# backends; Vulkan's functions come from the NVN layer's device (IMGUI_IMPL_VULKAN_NO_PROTOTYPES, ui/start.cpp),
+# The start screen's UI: Dear ImGui (the submodule, a release tag) with its SDL3 and Vulkan
+# backends, and SDL's renderer for the shader cache's own run (ui/seed.h: no GPU API there); Vulkan's functions come from the NVN layer's device (IMGUI_IMPL_VULKAN_NO_PROTOTYPES, ui/start.cpp),
 # against drippu's Vulkan headers.
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/imgui)
 add_library(imgui STATIC ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
                          ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
-                         ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
+                         ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
 target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends
                                         ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/drippu/externals/Vulkan-Headers/include)
 target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
@@ -139,7 +139,7 @@ else()
     target_compile_options(ooz PRIVATE -w -fno-strict-aliasing -O1)
 endif()
 
-add_executable(nxrt src/rt.cpp src/game/load.cpp src/build/build.cpp src/build/unpack.cpp src/seed/extract.cpp src/ui/start.cpp src/writetrack.cpp src/svc.cpp src/threads.cpp src/kernel.cpp src/ipc.cpp src/capture.cpp src/gpu.cpp src/audio.cpp src/npdm.cpp src/perf.cpp src/diag.cpp src/window.cpp src/options.cpp src/mods.cpp src/resolution.cpp src/input.cpp src/fpx_probe.cpp src/overlay.cpp src/hle.cpp src/nvn/tap.cpp
+add_executable(nxrt src/rt.cpp src/game/load.cpp src/build/build.cpp src/build/unpack.cpp src/seed/extract.cpp src/ui/start.cpp src/ui/seed.cpp src/writetrack.cpp src/svc.cpp src/threads.cpp src/kernel.cpp src/ipc.cpp src/capture.cpp src/gpu.cpp src/audio.cpp src/npdm.cpp src/perf.cpp src/diag.cpp src/window.cpp src/options.cpp src/mods.cpp src/resolution.cpp src/input.cpp src/fpx_probe.cpp src/overlay.cpp src/hle.cpp src/nvn/tap.cpp
                     src/nvn/layer.cpp src/nvn/device.cpp src/nvn/state.cpp src/nvn/memory.cpp src/nvn/cmdbuf.cpp src/nvn/commands.cpp src/nvn/sampler.cpp src/nvn/texture.cpp src/nvn/program.cpp src/nvn/images.cpp src/nvn/shaders.cpp src/nvn/compute_translate.cpp src/nvn/rescaling_pass.cpp src/nvn/smaa.cpp src/nvn/shadertest.cpp src/nvn/window.cpp src/nvn/display.cpp src/nvn/render.cpp src/nvn/binds.cpp src/nvn/draws.cpp src/nvn/pipeline.cpp src/nvn/formats.cpp src/nvn/queue.cpp src/nvn/heavy.cpp src/nvn/shader_store.cpp src/nvn/research.cpp src/nvn/difftest.cpp
                     ${RT_SERVICES} ${RT_PLATFORM})
 target_link_libraries(nxrt PRIVATE video_core audio_core imgui ooz SDL3::SDL3-static Threads::Threads)
@@ -175,19 +175,19 @@ endif()
 get_directory_property(RT_HOST_SHADERS_INCLUDE DIRECTORY gpu DEFINITION HS_OUT)
 target_include_directories(nxrt PRIVATE ${RT_HOST_SHADERS_INCLUDE})
 add_dependencies(nxrt host_shaders)
-# SHADER_PLAN Phase 4: the shader store's tag names drippu's commit (another translator: stored stages ignored).
+# the shader store's tag names drippu's commit (another translator: stored stages ignored).
 execute_process(COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/drippu rev-parse --short=12 HEAD
                 OUTPUT_VARIABLE RT_DRIPPU_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 set_property(SOURCE src/nvn/shader_store.cpp APPEND PROPERTY COMPILE_DEFINITIONS "RT_DRIPPU_COMMIT=\"${RT_DRIPPU_COMMIT}\"")
 if (MSVC) # clang-cl: its -Wall means -Weverything; GCC's meaning through its GCC-style driver
     target_compile_options(nxrt PRIVATE /clang:-Wall /clang:-Wextra)
-    # The executable is started from \\wsl.localhost (PORT_PLAN Phase 4): Windows copies it to local swap at start
+    # The executable is started from \\wsl.localhost: Windows copies it to local swap at start
     # instead of paging 1.6 GB of code over the network path while the game runs.
     target_link_options(nxrt PRIVATE /SWAPRUN:NET)
     # 16 MB stacks for every thread (Windows' default is 1 MB, Linux's 8 MB; lifted code nests deeply), as
     # LASRecomp does; winmm for timeBeginPeriod.
     target_link_options(nxrt PRIVATE /STACK:16777216)
-    # A release (RELEASE_PLAN) has no console window: a Windows program still entered at main; with no terminal its
+    # A release has no console window: a Windows program still entered at main; with no terminal its
     # log goes to the per-user folder's nxrt.log (platform AttachOutput), its build jobs start without windows.
     option(NXRT_CONSOLE "Windows: a console program (off: no console window, the release)" ON)
     if (NOT NXRT_CONSOLE)

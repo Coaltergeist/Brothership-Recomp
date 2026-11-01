@@ -7,7 +7,7 @@
 // hands out free buffers and waits (without the kernel lock) when there is
 // none, as the real service does. Handing a buffer back before its composite
 // let the game draw the next frame into it first, and every other frame showed
-// an old picture (ARCHITECTURE §5.4).
+// an old picture.
 // Presented frames are captured as PNGs:
 // RT_CAPTURE=<frame>[,<frame>...] (default none) writes frame_<n>.png in the
 // working directory, from the renderer's output with Vulkan, otherwise from

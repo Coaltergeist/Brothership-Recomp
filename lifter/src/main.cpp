@@ -17,7 +17,7 @@
 // module whose build id they name, before linking and discovery (patch.h); <out_dir>/patches.txt lists each
 // write. Repeatable; files for other game versions are skipped.
 // --mod takes the same files but leaves the lifted bytes alone: each --mod becomes a switch the runtime turns on
-// (RT_MODS=<name>, the folder's or file's name; PORT_PLAN B2). The code words it changes are lifted in both
+// (RT_MODS=<name>, the folder's or file's name). The code words it changes are lifted in both
 // versions, its writes are listed in nx_table.c for the runtime to apply; <out_dir>/mods.txt lists them. A mod
 // that turns a word into a branch or writes over a relocation is refused (use --patch for it).
 

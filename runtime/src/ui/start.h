@@ -1,4 +1,4 @@
-// The start screen (LAUNCHER_PLAN Phase 1): shown in the window before the game boots - Play, Settings, Quit. The
+// The start screen: shown in the window before the game boots - Play, Settings, Quit. The
 // settings page is the options table (options.h) and the mods folder (mods.h); changes go to the settings file at
 // once and count from Play on (the window, the resolution and the mods are read when the game starts).
 //
@@ -22,7 +22,8 @@ bool Wanted(int argc, char** argv);
 /// process. `built_mods`: the mods lifted into this build (nxrecomp --mod), by name. `player`: a player start - the
 /// game is built from the start screen (build.h: the Build page; Play goes there while the build folder's module is
 /// not current) and loaded after Run returns. RT_UI_TEST also takes page=build and build (press Build at once); its
-/// play@ waits for a running build and a current module.
-void Run(const std::vector<std::string>& built_mods, bool player);
+/// play@ waits for a running build and a current module. Build runs the game's steps here and hands the shader steps
+/// to `--seed` (seed.h), which comes back with `build_page`: the start screen opens on the Build page.
+void Run(const std::vector<std::string>& built_mods, bool player, bool build_page = false);
 
 } // namespace rt::ui

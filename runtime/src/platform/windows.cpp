@@ -1,4 +1,4 @@
-// platform.h on Windows (10 1803 or newer: placeholder memory; PORT_PLAN Phase 4).
+// platform.h on Windows (10 1803 or newer: placeholder memory).
 //
 // Guest memory. Linux reserves the whole window inaccessible, opens what the
 // guest maps (pages appear on first touch) and replaces any 4 KB range by a
@@ -17,8 +17,7 @@
 // A guest thread touching a range while it is being remapped faults; the
 // vectored exception handler below waits for the remap and retries the
 // instruction. A touch of memory the guest has not mapped (a placeholder, or a
-// kept range, below) is not handled: it reaches the crash report, as on Linux
-// (old_plans/FASTMEM_PLAN.md Phase 1).
+// kept range, below) is not handled: it reaches the crash report, as on Linux.
 //
 // Every one of those changes is several system calls, and the guest maps and
 // unmaps small ranges all the time (~109,000 MapPhysicalMemory /
@@ -647,7 +646,7 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
     while (Clock::now() < deadline) YieldProcessor();
 }
 
-void AttachOutput(const std::string& log_file) {
+void AttachOutput(const std::string& log_file, bool continuing) {
     const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
     DWORD mode;
     const DWORD type = err && err != INVALID_HANDLE_VALUE ? GetFileType(err) : FILE_TYPE_UNKNOWN;
@@ -662,7 +661,8 @@ void AttachOutput(const std::string& log_file) {
     std::error_code ec;
     const std::filesystem::path log(log_file), old = std::filesystem::path(log).replace_extension(".old.log");
     std::filesystem::create_directories(log.parent_path(), ec);
-    std::filesystem::rename(log, old, ec);
+    if (!continuing) std::filesystem::rename(log, old, ec);
+    else ec = std::make_error_code(std::errc::file_exists); // (added to, as below)
     // (still open in the run that started this one - its restart into the game -: added to, not emptied)
     if (std::FILE* f = _wfreopen(log.wstring().c_str(), ec ? L"a" : L"w", stderr)) {
         _dup2(_fileno(f), _fileno(stdout)); // (stdout too: --build's progress, the usage line)

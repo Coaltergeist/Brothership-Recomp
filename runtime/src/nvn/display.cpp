@@ -1,4 +1,4 @@
-// The NVN layer's image on the host window (NVN_PLAN 9.1 display, 9.3).
+// The NVN layer's image on the host window.
 //
 // A swapchain on the window's surface (the layer's Vulkan device is made for it, device.cpp). Each
 // nvnQueuePresentTexture shows the presented texture: after a full barrier (the game's work on the

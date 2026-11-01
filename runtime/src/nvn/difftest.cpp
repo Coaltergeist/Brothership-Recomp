@@ -546,8 +546,8 @@ void RunCommandBufferTest(GuestContext* c) {
 }
 
 // Queues and syncs, on the layer alone (the SDK's need the GPU): sync
-// results, counter reports written before their sync signals (NVN_PLAN 5.0
-// rule 3) and in GPU order, many submissions in flight.
+// results, counter reports written before their sync signals
+// and in GPU order, many submissions in flight.
 void RunQueueTest(GuestContext* c) {
     const u64 before = g_differences;
     const u64 obj = Scratch::kObjects;
@@ -676,7 +676,7 @@ void RunQueueTest(GuestContext* c) {
     Log("difftest: queue: %llu differences", (unsigned long long)(g_differences - before));
 }
 
-// Copies into textures (NVN_PLAN 6.3), layer only: known bytes copied through
+// Copies into textures, layer only: known bytes copied through
 // nvnCommandBufferCopyBufferToTexture into levels, layers, 3D slices, a
 // compressed and a depth texture, then the Vulkan image read back.
 void RunCopyTest(GuestContext* c) {
@@ -787,7 +787,7 @@ void RunCopyTest(GuestContext* c) {
     Log("difftest: copies: %zu cases, %llu differences", std::size(cases), (unsigned long long)(g_differences - before));
 }
 
-// Windows (NVN_PLAN 9.1, 9.2), layer only: textures handed out in turn, the
+// Windows, layer only: textures handed out in turn, the
 // acquire sync signaled, and the pacing of the display model (interval 2:
 // 33 ms a frame, interval 1: 17 ms; measured over 12 frames, with margins).
 void RunWindowTest(GuestContext* c) {

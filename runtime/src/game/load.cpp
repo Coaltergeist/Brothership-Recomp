@@ -37,7 +37,7 @@ NxGameEntry Entry(const char* module) {
                              : module         ? module
                                               : std::string(base ? base : "") + kModule;
     SDL_SharedObject* so = SDL_LoadObject(path.c_str());
-    if (!so) Fatal("game: the game module %s did not load: %s (build it: BUILD_PLAN.md)", path.c_str(), SDL_GetError());
+    if (!so) Fatal("game: the game module %s did not load: %s (build it: nxrt --build, or Build on the start screen)", path.c_str(), SDL_GetError());
     const auto entry = reinterpret_cast<NxGameEntry>(SDL_LoadFunction(so, NX_GAME_ENTRY));
     if (!entry) Fatal("game: %s has no %s: not a game module", path.c_str(), NX_GAME_ENTRY);
     Log("game: module %s (loaded at t=%.2f s)", path.c_str(), Uptime());

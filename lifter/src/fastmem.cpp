@@ -107,7 +107,7 @@ const std::string& DirectHeader() {
    NX_MEM_BASE plus the guest address. The mask is the guest's address space; it also drops the top-byte tag
    AArch64 ignores (TBI). A wild address wraps into the window (guest memory, never host data) and faults
    there unless mapped. GPU-tracked pages (the driver seam) are not supported: the runtime refuses that mode
-   with this lift. Exclusives (recomp_ldxr ...) keep drippu's helpers. old_plans/FASTMEM_PLAN.md Phase 2. */
+   with this lift. Exclusives (recomp_ldxr ...) keep drippu's helpers. */
 
 #define NX_MEM_BASE 0x400000000000ULL
 #define NX_MEM_MASK 0x7FFFFFFFFFULL

@@ -1,4 +1,4 @@
-// Render state and the commands that set or use it (NVN_PLAN 8.1, 8.3):
+// Render state and the commands that set or use it:
 // render targets, viewports, depth ranges, scissors, multisample state, clears.
 #pragma once
 
@@ -19,7 +19,7 @@ struct ClipModes {
 };
 ClipModes DeviceClipModes(u64 device);
 
-// The driver's constant buffers as NVN lays them out (NVN_PLAN Phase 7, "Known before Phase 7",
+// The driver's constant buffers as NVN lays them out ("Known before Phase 7",
 // measured on the running driver): one shared c0 of 0x7000 bytes; per hardware graphics stage a c2 of
 // 0x700 bytes holding the bound handles. The layer keeps the game's NVN handles in c2 (the driver writes
 // its hardware descriptor numbers there; only the layer reads them back, when it resolves a binding).
@@ -27,7 +27,7 @@ constexpr u32 kC0Size = 0x7000, kC2Size = 0x700, kHwStages = 5;
 constexpr u32 kC0StorageBuffers = 0x110, kC0BaseVertex = 0x640, kC0BaseInstance = 0x644;
 constexpr u32 kC2Textures = 0x20, kC2Images = 0x120, kC2SeparateTextures = 0x168, kC2SeparateSamplers = 0x568;
 
-/// Compute's c0 (NVN_PLAN Phase 0.3, report §8.1): 0x500 bytes per dispatch, group counts at 0x200, uniform
+/// Compute's c0 (report §8.1): 0x500 bytes per dispatch, group counts at 0x200, uniform
 /// buffers {address low, high, size} at 0x210 + 16 x slot, storage buffers at 0x310 + 16 x slot.
 constexpr u32 kComputeC0Size = 0x500, kComputeC0Groups = 0x200, kComputeC0Uniform = 0x210, kComputeC0Storage = 0x310;
 /// The c2 of compute (stage 5) follows the graphics stages' in RenderState::c2.

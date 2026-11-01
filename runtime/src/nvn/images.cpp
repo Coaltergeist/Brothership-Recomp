@@ -1,4 +1,4 @@
-// Texture images, the upload ring and copies into textures (NVN_PLAN 6.1, 6.3).
+// Texture images, the upload ring and copies into textures.
 //
 // Texture contents live in Vulkan images (6.3), one per texture storage
 // address, created at first use from the texture's settings; storage
@@ -129,7 +129,7 @@ bool SameSettings(const TextureBuilder& a, const TextureBuilder& b) {
            a.levels == b.levels && a.format == b.format && a.flags == b.flags && a.samples == b.samples;
 }
 
-/// RESOLUTION_PLAN Phase 3: whether an image of these settings is drawn at the run's scale. As yuzu's rule
+/// whether an image of these settings is drawn at the run's scale. As yuzu's rule
 /// (drippu's texture_cache/image_info.cpp): a 2D image of one level and one sample, taller than 288 texels
 /// (RT_RES_MIN_HEIGHT), that can be a render target and is not linear (the CPU's layout). Decided once, when the
 /// image is made (yuzu scales images up and down as they are used): the plaza's screen-sized targets, its blur
@@ -365,7 +365,7 @@ void Initialise(TextureImage& img, const Vulkan::vk::CommandBuffer& cmd) {
 }
 
 /// An unscaled image of `t`'s settings, initialised: copies between the game's size and a scaled image go
-/// through it (RESOLUTION_PLAN Phase 3).
+/// through it.
 std::shared_ptr<TextureImage> Twin(const TextureState& t, const Vulkan::vk::CommandBuffer& cmd) {
     auto img = MakeImage(t, false);
     Initialise(*img, cmd);
@@ -513,7 +513,7 @@ std::unique_ptr<ImageDownload> StartDownload(const TextureState& t, u32 level) {
     const FormatInfo* f = FindFormat(b.format);
     const bool sliced = b.target == kTarget3D, array1d = b.target == kTarget1DArray;
     u32 lw = std::max(1u, b.width >> level), lh = array1d ? 1 : std::max(1u, b.height >> level);
-    if (img->Scaled()) lw = img->UpSize(lw), lh = img->UpSize(lh); // (one level, 2D: RESOLUTION_PLAN Phase 3)
+    if (img->Scaled()) lw = img->UpSize(lw), lh = img->UpSize(lh); // (one level, 2D)
     const u32 count = sliced ? std::max(1u, b.depth >> level)
                              : b.target == kTarget2DArray ? b.depth : b.target == kTargetCube ? 6 : array1d ? b.height : 1;
     const u32 wb = CeilDiv(lw, f->block_w), hb = CeilDiv(lh, f->block_h);
@@ -782,7 +782,7 @@ void TranslateCopyBufferToTexture(Translator& t, const CopyBufferToTextureRecord
     g.region.bufferOffset = slice.offset;
     if (!img->Scaled()) {
         t.cmd.CopyBufferToImage(slice.buffer, *img->image, VK_IMAGE_LAYOUT_GENERAL, g.region);
-    } else { // RESOLUTION_PLAN Phase 3: into an unscaled twin, then blitted up
+    } else { // into an unscaled twin, then blitted up
         if (img->aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
             Fatal("nvn: CopyBufferToTexture into a scaled depth or stencil image (RT_RES) is not implemented yet");
         }
@@ -809,7 +809,7 @@ void TranslateCopyTextureToBuffer(Translator& t, const CopyBufferToTextureRecord
     g.region.bufferOffset = slice.offset;
     if (!img->Scaled()) {
         t.cmd.CopyImageToBuffer(*img->image, VK_IMAGE_LAYOUT_GENERAL, slice.buffer, g.region);
-    } else { // RESOLUTION_PLAN Phase 3: blitted down into an unscaled twin, read from there
+    } else { // blitted down into an unscaled twin, read from there
         if (img->aspect != VK_IMAGE_ASPECT_COLOR_BIT) {
             Fatal("nvn: CopyTextureToBuffer from a scaled depth or stencil image (RT_RES) is not implemented yet");
         }
@@ -871,7 +871,7 @@ void TranslateCopyTextureToTexture(Translator& t, const CopyTextureToTextureReco
     NoteImageUse(r.src, ImageUse::kCopySrc, s.level), NoteImageUse(r.dst, ImageUse::kCopyDst, d.level);
     FullBarrier(t.cmd);
     const VkImageSubresourceLayers ss{si->aspect, s.level, s.first_layer, s.layers}, ds{di->aspect, d.level, d.first_layer, d.layers};
-    if (si->Scaled() || di->Scaled()) { // RESOLUTION_PLAN Phase 3: each region in its image's own units
+    if (si->Scaled() || di->Scaled()) { // each region in its image's own units
         const auto sc = Corners(*si, s.offset, s.extent), dc = Corners(*di, d.offset, d.extent);
         const VkExtent3D se{static_cast<u32>(sc[1].x - sc[0].x), static_cast<u32>(sc[1].y - sc[0].y), s.extent.depth};
         const VkExtent3D de{static_cast<u32>(dc[1].x - dc[0].x), static_cast<u32>(dc[1].y - dc[0].y), d.extent.depth};

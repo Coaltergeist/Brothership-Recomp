@@ -1,4 +1,4 @@
-// Host functions callable from guest code (NVN_PLAN Phase 1).
+// Host functions callable from guest code.
 //
 // A host function gets a fake guest address in kHostFnRegion (rt.h), a region
 // that is reserved in the guest map and never accessible. Guest code reaches it
@@ -13,8 +13,8 @@
 // bound to the function (slots.txt) to its host address once rtld has filled
 // them: rtld binds lazily, and the first call through a slot is the resolver's
 // jump to the target, which rt_jump sees. Direct B/BL between lifted functions
-// are not caught: check that a target has none (tools/direct_callers.py) before
-// overriding it.
+// are not caught: check that a target has none (search the lifted code for
+// direct calls to it) before overriding it.
 #pragma once
 
 #include "rt.h"

@@ -1,8 +1,7 @@
 # GPU emulation reused from drippu (yuzu family): a subset of `common`,
 # `shader_recompiler` and `video_core`, built from the third_party submodules.
 # drippu's `core/` is replaced by the headers in shim/ (they come first in the
-# include path) and by the runtime's implementations of them. See handoff.md
-# §2 and analysis/agent/reports/videocore_report.md (verification section).
+# include path) and by the runtime's implementations of them.
 #
 # drippu's own top-level CMake (CPM, the whole emulator) is not used. Where
 # its CMakeLists can be included as they are, they are; video_core's and the
@@ -37,7 +36,7 @@ endfunction()
 
 # Flags drippu builds with (drippu src/CMakeLists.txt), minus -fno-rtti: the
 # runtime uses RTTI and subclasses drippu types (EmuWindow, ...).
-if (MSVC) # clang-cl (Windows, PORT_PLAN Phase 4): the same code generation options through its GCC-style driver
+if (MSVC) # clang-cl (Windows): the same code generation options through its GCC-style driver
     add_compile_options(/clang:-fwrapv -mcx16 -Wno-array-bounds)
 else()
     add_compile_options(-fwrapv -mcx16 -Wno-array-bounds -Wno-stringop-overread -Wno-stringop-overflow)
@@ -113,7 +112,7 @@ set(GLSLANG_HOST_DIR ${CMAKE_BINARY_DIR}/glslang-host)
 set(GLSLANGVALIDATOR ${GLSLANG_HOST_DIR}/StandAlone/glslang)
 if (NOT EXISTS ${GLSLANGVALIDATOR})
     message(STATUS "Building glslang (host tool, once)")
-    # Cross builds (Windows from WSL, PORT_PLAN Phase 4): the tool runs on the build machine, so it is built
+    # Cross builds (Windows from WSL): the tool runs on the build machine, so it is built
     # with the build machine's compilers, not the target's.
     set(GLSLANG_HOST_COMPILERS)
     if (CMAKE_CROSSCOMPILING)
@@ -145,7 +144,7 @@ foreach (c ${FFMPEG_COMPONENTS})
     list(APPEND FFmpeg_LIBRARIES ${FFMPEG_BUILD}/lib${c}/lib${c}.a)
 endforeach()
 file(MAKE_DIRECTORY ${FFMPEG_BUILD})
-# Windows from WSL (PORT_PLAN Phase 4): FFmpeg's MSVC toolchain with clang-cl, lld-link and llvm-lib from the
+# Windows from WSL: FFmpeg's MSVC toolchain with clang-cl, lld-link and llvm-lib from the
 # cross toolchain (tools/cross/windows-clang-cl.cmake), the build machine's compiler for its build tools.
 set(FFMPEG_CROSS)
 if (CMAKE_CROSSCOMPILING AND WIN32)
@@ -188,7 +187,7 @@ execute_process(COMMAND git -C ${DRIPPU} rev-parse --short HEAD OUTPUT_VARIABLE 
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(GIT_REFSPEC main)
 set(GIT_DESC ${GIT_COMMIT})
-set(REPO_NAME "drippu (switch-recomp)")
+set(REPO_NAME "drippu (Brothership Recomp)")
 set(BUILD_FULLNAME "drippu ${GIT_COMMIT}")
 set(BUILD_VERSION ${GIT_COMMIT})
 set(BUILD_ID amd64)

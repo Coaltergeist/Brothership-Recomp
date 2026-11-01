@@ -1,4 +1,4 @@
-// Shader translation (NVN_PLAN 7.2) with drippu's shader_recompiler.
+// Shader translation with drippu's shader_recompiler.
 //
 // The compiler settings (Profile, HostTranslateInfo) come from the layer's
 // Vulkan device the way drippu's pipeline cache makes them

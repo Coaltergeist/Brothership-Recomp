@@ -1,4 +1,4 @@
-// Guest loads and stores inline (handoff "Speed": the memory path). drippu's helpers (recomp_load64 ...,
+// Guest loads and stores inline (the memory path). drippu's helpers (recomp_load64 ...,
 // in recomp_runtime.c) resolve every access through two more calls and their checks; at the title ->
 // file-select transition they were ~65 % of GameThread's time (2026-10-18). nx_mem.h redefines the
 // helper names as small inline functions that take the common case themselves: a plain memory page,
@@ -15,7 +15,7 @@ namespace nxrecomp::fastmem {
 const std::string& Header();
 
 /// Where the runtime places the guest address space in the host (runtime/src/rt.h kHostWindowBase): with
-/// --direct-mem the generated code adds it to every guest address (old_plans/FASTMEM_PLAN.md Phase 2).
+/// --direct-mem the generated code adds it to every guest address.
 constexpr unsigned long long kDirectBase = 0x4000'0000'0000ULL;
 
 /// nx_mem.h for --direct-mem: every load and store (pairs too) is one host access at kDirectBase plus the

@@ -1,4 +1,4 @@
-// Integer Advanced SIMD as host vector code (SIMD_PLAN.md). Phase 1 covers the vector (not scalar)
+// Integer Advanced SIMD as host vector code. Phase 1 covers the vector (not scalar)
 // forms of: three same (halving / rounding halving add and sub, add, sub, mul, mla, mls, compares,
 // max, min, abd, aba, sqdmulh, sqrdmulh), shift by immediate (sshr, ushr, ssra, usra, srshr, urshr,
 // srsra, ursra, shl, sshll, ushll, shrn, rshrn and the saturating narrowing shifts), three different
@@ -553,7 +553,7 @@ bool Emit(uint32_t i, std::string& out) {
     return true;
 }
 
-// --- FP fast path (SIMD_PLAN.md Phase 4) -----------------------------------------------------------
+// --- FP fast path -----------------------------------------------------------
 // One call per site into nx_simd.h's nxv_fpx_* (constant arguments: the compiler specialises each), which
 // returns 1 after storing a kept result and 0, changing nothing, when the exact translation must run.
 bool EmitFp(uint32_t i, const std::string& fallback, std::string& out) {
@@ -625,7 +625,7 @@ bool EmitFp(uint32_t i, const std::string& fallback, std::string& out) {
 }
 
 const std::string& Header() {
-    static const std::string h = R"(/* nx_simd.h: written by nxrecomp (lifter/src/simd.cpp; SIMD_PLAN.md). */
+    static const std::string h = R"(/* nx_simd.h: written by nxrecomp (lifter/src/simd.cpp). */
 #pragma once
 #include <stdint.h>
 #include <string.h>
@@ -645,7 +645,7 @@ NXV_T(nxv_s32x8, int32_t, 32);  NXV_T(nxv_u32x8, uint32_t, 32);
 NXV_T(nxv_s64x4, int64_t, 32);  NXV_T(nxv_u64x4, uint64_t, 32);
 #undef NXV_T
 
-/* FP fast path (SIMD_PLAN.md Phase 4; lifter/src/simd.cpp EmitFp): drippu's FPX conditions on all lanes at
+/* FP fast path (lifter/src/simd.cpp EmitFp): drippu's FPX conditions on all lanes at
    once. Arithmetic (FADD, FSUB, FMUL, FADDP, FDIV, FABD, FRECPS, FRSQRTS) stores a result only when the gate
    RECOMP_FPX_OPEN holds (FPSR.IXC set, FPCR default) and every lane is kept as drippu's per-lane fast path would
    keep it (sums: finite; products and quotients: larger than the smallest normal, or a finite one of a zero;

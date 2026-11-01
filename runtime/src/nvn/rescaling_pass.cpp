@@ -1,4 +1,4 @@
-// Resolution scaling in the shaders, the factor read at run time (RESOLUTION_PLAN Phase 2).
+// Resolution scaling in the shaders, the factor read at run time.
 //
 // Adapted from drippu's ir_opt/rescaling_pass.cpp (yuzu's; GPL-2.0-or-later / GPL-3.0-or-later), which drippu runs
 // inside TranslateProgram only when Settings::values.resolution_info is active and which writes the factor into

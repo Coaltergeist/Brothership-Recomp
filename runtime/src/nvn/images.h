@@ -1,4 +1,4 @@
-// Texture contents on the Vulkan side (NVN_PLAN 6.1, 6.3) and the per-submission
+// Texture contents on the Vulkan side and the per-submission
 // upload ring (5.0 rule 1), for queue.cpp's translation of records.
 #pragma once
 
@@ -29,7 +29,7 @@ struct TextureImage {
     VkImageAspectFlags aspect = 0;
     bool initialised = false; // its layout transition has been recorded
     bool storage = false;     // created for storage-image use (the device can store to its format)
-    // RESOLUTION_PLAN Phase 3: the factor x 4 the image was made at (4: the game's size; ScaleN() when MakeImage's
+    // the factor x 4 the image was made at (4: the game's size; ScaleN() when MakeImage's
     // rule scales it). Sizes and coordinates in the game's units become the image's by Up / UpSize.
     u32 scale_n = 4;
     bool Scaled() const { return scale_n != 4; }
@@ -141,7 +141,7 @@ struct TraceBytes {
     u64 from_device = 0;  // and back into the download ring after it
 };
 
-/// BUFFER_CACHE_PLAN Phase 2 (draws.cpp): guest memory kept on the GPU across a queue's submissions, refreshed
+/// The buffer cache (draws.cpp): guest memory kept on the GPU across a queue's submissions, refreshed
 /// page by page when write tracking (writetrack.h) saw a CPU write. One per queue (queue.cpp); null when off
 /// (RT_NVN_BUFFER_CACHE=0).
 struct BufferCache;
@@ -165,7 +165,7 @@ struct CacheVerify {
 /// The cache's device buffer (the destination of every CacheCopy).
 VkBuffer CacheBuffer(const BufferCache& cache);
 
-/// HEAVY_FRAMES_PLAN Phase 2 (draws.cpp IndexedRead): the latest write of each byte in one submission's list of
+/// The write index (draws.cpp IndexedRead): the latest write of each byte in one submission's list of
 /// writes, by address - disjoint [lo, hi) ranges naming the write's index in the list. It catches up with the list
 /// when read (`indexed`: the writes seen so far; the list is only appended to until the submission retires).
 struct WriteIndex {
@@ -211,7 +211,7 @@ struct Translator {
         size_t writes;
     };
     std::map<std::array<u64, 2>, SnapshotEntry> snapshots{};
-    /// draws.cpp PageCopy (BUFFER_CACHE_PLAN Phase 0.5): blocks of guest memory with room reserved in this
+    /// draws.cpp PageCopy: blocks of guest memory with room reserved in this
     /// submission's upload ring, by their first address: up to `hi`, in `slice` (the first byte at slice.offset, a
     /// multiple of 4096); pages are copied in when a read first needs them (`filled`: the count of writes recorded
     /// then plus one, 0 = not copied), and the recorded writes over the block seen so far (`scanned` of t.writebacks)
@@ -277,7 +277,7 @@ std::unique_ptr<ImageDownload> StartDownload(const TextureState& t, u32 level);
 /// Tests: StartDownload, then waits for it. Empty if the texture has no image.
 std::vector<u8> DownloadImage(const TextureState& t, u32 level);
 
-/// RT_NVN_LOG_TARGETS=1 (RESOLUTION_PLAN Phase 0, a test aid): how each image is used, rewritten into
+/// RT_NVN_LOG_TARGETS=1 (a test aid): how each image is used, rewritten into
 /// targets.csv (the run folder) every 5 s - one row per image (address and settings): its uses by kind, the
 /// levels drawn to, and the smallest and largest viewport of the draws into it (the game's dynamic resolution
 /// shows as viewports smaller than the target). kToBuffer and kCapture read the image back into memory.

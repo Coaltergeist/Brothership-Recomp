@@ -1,4 +1,4 @@
-// Shader translation (NVN_PLAN 7.2): NVN's Maxwell shaders to SPIR-V with
+// Shader translation: NVN's Maxwell shaders to SPIR-V with
 // drippu's shader_recompiler.
 #pragma once
 
@@ -74,7 +74,7 @@ TranslatedShader TranslateStage(NvnEnvironment& env);
 /// The same with the given runtime state (graphics stages).
 TranslatedShader TranslateStage(NvnEnvironment& env, Shader::RuntimeInfo runtime);
 
-/// Resolution scaling with the factor read at run time (rescaling_pass.cpp, RESOLUTION_PLAN Phase 2): run on
+/// Resolution scaling with the factor read at run time (rescaling_pass.cpp): run on
 /// every program right after TranslateProgram / TranslateComputeProgram. RT_NVN_RESCALE_PASS=0 leaves the
 /// programs as drippu made them (A/B; the shader store is then off: its entries are made with the pass).
 void RescalingPass(Shader::IR::Program& program);

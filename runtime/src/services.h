@@ -14,7 +14,7 @@ struct AccountUid {
 };
 constexpr AccountUid kAccountUser{0x0000'0000'0000'0001, 0x5265'636F'6D70'0001}; // any non-zero id
 
-/// RT_DOCKED=1 (RESOLUTION_PLAN Phase 0, a test): am, apm and vi report docked mode (operation and performance
+/// RT_DOCKED=1 (a test): am, apm and vi report docked mode (operation and performance
 /// mode 1, a 1920x1080 display) instead of handheld; the controller stays the handheld one (hid.cpp).
 bool ReportDocked();
 

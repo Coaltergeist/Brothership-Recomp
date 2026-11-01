@@ -53,7 +53,7 @@ struct StorageLayout {
 std::optional<StorageLayout> ComputeLayout(const TextureBuilder& b, std::string& why);
 
 /// NVN's storage size and alignment for the builder's settings, or nothing
-/// (and `why`) for settings the layer does not handle yet (NVN_PLAN 6.2).
+/// (and `why`) for settings the layer does not handle yet.
 std::optional<Storage> ComputeStorage(const TextureBuilder& b, std::string& why);
 
 /// What an initialised NVNtexture is: its builder's settings, its storage and

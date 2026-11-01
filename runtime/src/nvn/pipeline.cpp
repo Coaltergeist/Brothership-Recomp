@@ -1,4 +1,4 @@
-// Graphics pipelines (NVN_PLAN 7.4).
+// Graphics pipelines.
 //
 // A pipeline is made from the queue's RenderState at a draw: the bound program's stages (vertex, geometry,
 // fragment; tessellation not yet) translated together by drippu's recompiler — one binding numbering for
@@ -26,7 +26,7 @@
 // nothing) when at least 8 pipelines were added or a seed is to be kept, and at a quiet moment in play (at least
 // 16 added, none created for 60 s, 5 min since the last write; SavePipelineCacheIfChanged at each present).
 // RT_PIPELINE_CACHE=0: no cache. It saves the driver's compilation, not drippu's translation.
-// Each new pipeline logs one line (BuildOrRemember, SHADER_PLAN Phase 0): its total time, split into
+// Each new pipeline logs one line (BuildOrRemember): its total time, split into
 // translation and driver, whether the driver found it in the pipeline cache (Vulkan 1.3 creation feedback:
 // "cache hit" / "cache miss"; "cache ?" without it) and its stages' code hashes (StageHash: content, not
 // address); the cache's write lines and Exit add the run's totals (PipelineTotals).
@@ -92,9 +92,10 @@ struct Disk {
     std::chrono::steady_clock::time_point last_write{};
     std::filesystem::path marker;         // the seed's marker, written with the next write of the file (Seed)
     std::string marker_tag;
+    std::atomic<bool> keep{false};        // never written by this run (KeepPipelineCacheFile)
 };
 
-/// The run's pipeline builds (SHADER_PLAN Phase 0).
+/// The run's pipeline builds.
 struct Totals {
     std::atomic<u64> graphics{0}, compute{0}, hits{0}, misses{0}, slow{0}, ns{0}, worst_ns{0};
     std::atomic<u64> stages{0}, stage_reuses{0}, stages_for_previous{0}; // RT_NVN_STAGE_ALONE (StageFor)
@@ -214,6 +215,9 @@ VkPipelineCache DiskCache() {
 
 thread_local u64 t_driver_ns = 0; // the last pipeline creation's driver time on this thread (BuildOrRemember)
 thread_local int t_cache_hit = -1; // ... and whether the driver's cache had it (1 / 0; -1: not reported)
+// ... where its stages came from (StageFor) and what each library cost (LibraryFor): for the pipeline's log line,
+// to tell a stage the seed never had from a seeded one the driver did not find
+thread_local std::string t_stage_sources, t_library_costs;
 
 /// Pipeline creation feedback (core in Vulkan 1.3): whether the driver found the pipeline in the cache.
 bool FeedbackOn() {
@@ -289,7 +293,7 @@ void WriteCache(Disk& d, const char* why) {
 
 void SavePipelineCacheIfChanged() {
     Disk& d = TheDisk();
-    if (!d.loaded || !d.cache) return; // (a stale `loaded` only skips one present)
+    if (!d.loaded || !d.cache || d.keep) return; // (a stale `loaded` only skips one present)
     const u64 made = d.made.load(std::memory_order_relaxed);
     if (made < d.written_made.load(std::memory_order_relaxed) + 16) return;
     const auto now = std::chrono::steady_clock::now();
@@ -304,11 +308,19 @@ void SavePipelineCacheIfChanged() {
     }).detach();
 }
 
+void KeepPipelineCacheFile() {
+    TheDisk().keep = true;
+}
+
 void SavePipelineCacheAtExit() {
     Disk& d = TheDisk();
     for (int i = 0; i < 1000 && d.writing.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
     Log("nvn: at exit: %s", PipelineTotals().c_str());
     if (!d.loaded || !d.cache) return;
+    if (d.keep) {
+        Log("nvn: pipeline cache not written at exit: kept for the run that follows (KeepPipelineCacheFile)");
+        return;
+    }
     const u64 added = d.made.load() - d.written_made.load();
     bool marker_due;
     {
@@ -527,7 +539,7 @@ VkFormat SupportedVertexFormat(VkFormat f) {
 std::vector<u8> ReadCode(const ProgramStage& s);
 
 /// FNV-1a (64-bit) of a stage's instructions and compiler constants, read from its code memory: what the
-/// stage is, whatever its address (SHADER_PLAN Phase 1 keys by it; the debug tag at +0 is left out).
+/// stage is, whatever its address (stages alone are keyed by it; the debug tag at +0 is left out).
 /// StageHash of `s`'s code memory `code` (as ReadCode reads it).
 u64 CodeHash(const std::vector<u8>& code, const ProgramStage& s) {
     u64 h = 0xcbf29ce484222325ull;
@@ -635,6 +647,8 @@ bool BuildLogged(P& fresh_ref, const char* kind, F&& build) {
     const auto t0 = std::chrono::steady_clock::now();
     t_driver_ns = 0;
     t_cache_hit = -1;
+    t_stage_sources.clear();
+    t_library_costs.clear();
     try {
         build(*fresh);
     } catch (const NotYet& e) {
@@ -711,9 +725,13 @@ bool BuildLogged(P& fresh_ref, const char* kind, F&& build) {
     if (total > kSlowBuildMs) {
         t.slow.fetch_add(1);
     }
-    Log("nvn: new %s pipeline #%llu (t=%.2f s): %.1f ms (translation %.1f ms, driver %.1f ms, cache %s); code %s", kind,
+    // graphics pipelines built alone and linked: each stage's source and each library's cost
+    std::string parts;
+    if (!t_stage_sources.empty()) parts += "; stages " + t_stage_sources;
+    if (!t_library_costs.empty()) parts += "; libraries " + t_library_costs;
+    Log("nvn: new %s pipeline #%llu (t=%.2f s): %.1f ms (translation %.1f ms, driver %.1f ms, cache %s)%s; code %s", kind,
         (unsigned long long)n, Uptime(), total, total - driver, driver,
-        t_cache_hit == 1 ? "hit" : t_cache_hit == 0 ? "miss" : "?", hashes.c_str());
+        t_cache_hit == 1 ? "hit" : t_cache_hit == 0 ? "miss" : "?", parts.c_str(), hashes.c_str());
     return true;
 }
 
@@ -791,7 +809,7 @@ bool StillHolds(const P& p, const RenderState& rs) {
     return true;
 }
 
-// RT_NVN_STAGE_DEPS=1 (SHADER_PLAN: the measurements before choosing a route): for each stage of a new
+// RT_NVN_STAGE_DEPS=1 (the measurements before choosing a route): for each stage of a new
 // graphics pipeline, whether its SPIR-V depends on the pipeline's state, i.e. whether a stage built on its own
 // (from the game files, before any draw) could serve this pipeline. The stage is translated again, each time
 // with its own binding numbers (sharing them across stages is our choice, not state): with this pipeline's
@@ -802,7 +820,7 @@ bool StillHolds(const P& p, const RenderState& rs) {
 // "several". Pins (constant words read while building the control flow) are counted from the build itself.
 bool StageAloneOn();
 
-// RT_NVN_GPL (SHADER_PLAN Phase 2; default on where the device has it; =0: whole pipelines): graphics pipelines
+// RT_NVN_GPL (default on where the device has it; =0: whole pipelines): graphics pipelines
 // are linked from pipeline libraries (Build, LibraryFor) - one per stage build and render pass, so a new pipeline
 // of known stages costs a link instead of a compile. Needs the stages built alone and the state the shader
 // libraries would otherwise hold set at each draw (extended dynamic state 1 and 2).
@@ -901,7 +919,7 @@ void LogStageDeps(const GraphicsPipeline& p, const ProgramStage& program, u32 s,
         colours, pins, types, answers.c_str());
 }
 
-// RT_NVN_STAGE_ALONE (default on; =0: the per-pipeline translation in Build) - SHADER_PLAN Phase 1: every stage
+// RT_NVN_STAGE_ALONE (default on; =0: the per-pipeline translation in Build): every stage
 // is translated on its own and shared by all pipelines that use it. Each has its own descriptor set (fragment 0,
 // pushed when it fits; vertex 1; geometry 2 - drippu decorates everything with set 0, MoveDescriptorSet rewrites
 // it) with its own binding numbers, and takes every input of a previous stage as present. What a stage still
@@ -1014,7 +1032,7 @@ void FinishStage(StageBuild& b, u32 s, const std::vector<u32>& spirv);
 
 /// Translates stage `s` (code memory `code`) alone with runtime state `rt` and `hooks` into `b`: its module, info,
 /// descriptor set and templates. `building_cfg` is cleared once the control flow is built (ReadsThatPin).
-/// `spirv_out`: also gets the SPIR-V as bound (the shader store, SHADER_PLAN Phase 4).
+/// `spirv_out`: also gets the SPIR-V as bound (the shader store).
 void TranslateStageInto(StageBuild& b, const std::vector<u8>& code, const ProgramStage& program, u32 s,
                         const Shader::RuntimeInfo& rt, ShaderHooks hooks, const std::shared_ptr<bool>& building_cfg,
                         std::vector<u32>* spirv_out = nullptr) {
@@ -1085,19 +1103,29 @@ std::shared_ptr<const StageBuild> StageFor(const ProgramStage& program, u32 s, c
     const std::string assumptions = StageAssumptions(s, rt, extra);
     key += assumptions;
 
+    static constexpr const char* kStageNames[] = {"vertex", "fragment", "geometry", "tess control", "tess evaluation"};
+    const auto source = [s, &extra](const char* from) {
+        t_stage_sources += t_stage_sources.empty() ? "" : ", ";
+        t_stage_sources += s < std::size(kStageNames) ? kStageNames[s] : "?";
+        t_stage_sources += extra.empty() ? " " : " (for its previous stage) ";
+        t_stage_sources += from;
+    };
     StageCache& c = Stages();
     std::lock_guard lock(c.mu);
     auto& variants = c.stages[key];
     for (const auto& b : variants) {
         if (StageHolds(*b, rs)) {
             TheTotals().stage_reuses.fetch_add(1, std::memory_order_relaxed);
+            source("reused");
             return b;
         }
     }
-    // translated before play (the seed's, SHADER_PLAN Phase 4) and its checks hold: no translation
+    // translated before play (the seed's) and its checks hold: no translation
     std::optional<StoredStage> stored;
+    const char* translated = "translated (store off)";
     if (ShaderStoreOn()) {
         stored = StoreGet(StoreKey(code, program, s, assumptions));
+        translated = stored ? "translated (its store entry's reads differ)" : "translated (not in the store)";
         if (stored && !StoredHolds(*stored, rs)) stored.reset();
         if (stored && !ShaderStoreCheck()) {
             auto b = std::make_shared<StageBuild>();
@@ -1107,6 +1135,7 @@ std::shared_ptr<const StageBuild> StageFor(const ProgramStage& program, u32 s, c
             b->type_reads = stored->type_reads;
             FinishStage(*b, s, stored->spirv);
             TheTotals().stages_stored.fetch_add(1, std::memory_order_relaxed);
+            source("from the store");
             variants.push_back(b);
             return b;
         }
@@ -1131,6 +1160,9 @@ std::shared_ptr<const StageBuild> StageFor(const ProgramStage& program, u32 s, c
     TranslateStageInto(*b, code, program, s, rt, std::move(hooks), building_cfg, stored ? &spirv : nullptr);
     if (stored) CheckStored("graphics", CodeHash(code, program), *stored, spirv, b->info);
     TheTotals().stages.fetch_add(1, std::memory_order_relaxed);
+    if (stored) translated = "translated (checking its store entry)";
+    source(translated);
+    if (!b->cbuf_reads.empty()) t_stage_sources += " pinned"; // control flow from constant words: the seed skips it
     variants.push_back(b);
     return b;
 }
@@ -1300,11 +1332,19 @@ std::shared_ptr<const PipelineLibrary> LibraryFor(VkGraphicsPipelineLibraryFlags
         if (!s) s = std::make_shared<Libraries::Slot>();
         slot = s;
     }
+    const char* const name = part == VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT     ? "input"
+                             : part == VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT ? "pre-raster"
+                             : part == VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT           ? "fragment"
+                                                                                                      : "output";
+    t_library_costs += t_library_costs.empty() ? "" : ", ";
+    t_library_costs += name;
     std::lock_guard made(slot->mu); // builders of different libraries compile at the same time (Phase 3)
     if (slot->lib) {
         l.reused.fetch_add(1, std::memory_order_relaxed);
+        t_library_costs += " reused";
         return slot->lib;
     }
+    const auto t0 = std::chrono::steady_clock::now();
     auto lib = std::make_shared<PipelineLibrary>();
     if (!sets.empty()) lib->layout = PipelineLayout(sets);
     VkPipelineCreationFeedback feedback{};
@@ -1323,10 +1363,13 @@ std::shared_ptr<const PipelineLibrary> LibraryFor(VkGraphicsPipelineLibraryFlags
     };
     fill(ci);
     lib->pipeline = Vk().device->GetLogical().CreateGraphicsPipeline(ci, DiskCache());
-    if ((feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) &&
-        !(feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT)) {
-        hit = false;
-    }
+    const bool valid = feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT;
+    const bool cached = feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
+    if (valid && !cached) hit = false;
+    char cost[48];
+    std::snprintf(cost, sizeof cost, " %s %.1f ms", !valid ? "?" : cached ? "hit" : "miss",
+                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    t_library_costs += cost;
     l.made.fetch_add(1, std::memory_order_relaxed);
     slot->lib = lib;
     return lib;
@@ -1360,7 +1403,7 @@ Vulkan::vk::Pipeline Link(const GraphicsPipeline& p, VkRenderPass pass, bool opt
 // thread and drawn with from then on (GraphicsPipeline::optimised); the fast link stays alive (command buffers in
 // flight may use it). Off since 2026-10-23: making those links while the game loaded the plaza held its loading
 // thread ~1.1 s longer in 5 of 7 runs (0 of 2 without; also with the re-links built but never drawn), and the
-// fast links draw as fast at 720p (the GPU is not the limit). To measure again at 1440p (PORT_PLAN B4), e.g. with
+// fast links draw as fast at 720p (the GPU is not the limit). To measure again at 1440p, e.g. with
 // the re-links deferred to idle time.
 bool OptimiseOn() {
     static const bool on = [] {
@@ -1447,7 +1490,7 @@ std::string LibraryTotals() {
 /// seed's SeedStage, so both make the same SPIR-V, layout and pipeline.
 void FinishCompute(ComputePipeline& p, const std::vector<u32>& spirv, VkPipelineCache cache);
 
-/// `spirv_out`: also gets the SPIR-V (the shader store, SHADER_PLAN Phase 4).
+/// `spirv_out`: also gets the SPIR-V (the shader store).
 void MakeCompute(ComputePipeline& p, std::vector<u8> code, ShaderHooks hooks, bool& building_cfg, VkPipelineCache cache,
                  std::vector<u32>* spirv_out = nullptr) {
     const u64 hash = CodeHash(code, p.program);
@@ -1510,8 +1553,8 @@ void FinishCompute(ComputePipeline& p, const std::vector<u32>& spirv, VkPipeline
     }, cache);
 }
 
-// RT_NVN_SEED=<dir> (SHADER_PLAN Phase 5): the game's shader stages, extracted from the user's own game files
-// (<hash>.ctrl / .code / .asm: tools/shaderseed), are each built once into a stage library on worker threads -
+// RT_NVN_SEED=<dir>: the game's shader stages, extracted from the user's own game files
+// (<hash>.ctrl / .code / .asm, as nxrt --extract-shaders writes them), are each built once into a stage library on worker threads -
 // translated as StageFor translates them, so the SPIR-V is what play makes, then compiled by the driver into our
 // pipeline cache file (DiskCache; NVIDIA's own disk cache until 2026-10-24, which holds ~1 GB in all and dropped
 // part of the ~1.2 GB seed) - and the library dropped. A draw in play then finds its stages' compiles in that cache
@@ -1525,7 +1568,7 @@ void FinishCompute(ComputePipeline& p, const std::vector<u32>& spirv, VkPipeline
 // next to the pipeline cache (<program id>.nvn.seed: driver, device, stage count) skips it once done (and only
 // while that cache file exists).
 // RT_NVN_SEED_ONLY=1: the seed alone at the first NVN call, waiting for it, then the run ends (depth mode
-// RT_NVN_SEED_DEPTH_MODE, default 1: Brothership's).
+// RT_NVN_SEED_DEPTH_MODE, default 1: Brothership's); with RT_NVN_SEED_FRESH=1 into an empty cache (StartSeed).
 
 /// The integer generic attributes a vertex stage's assembly text reads (as integers: .S/.U types, I2F).
 std::bitset<32> IntegerAttributes(const std::string& text) {
@@ -1668,7 +1711,7 @@ struct Seed {
     u32 threads = 0;
 };
 
-/// A seed stage's translation into the shader store (SHADER_PLAN Phase 4), each texture type it was answered with
+/// A seed stage's translation into the shader store, each texture type it was answered with
 /// stored with the constant words its handle came from (decoded from SeedCbuf's bits), so play checks it as a
 /// variant's (TypeHolds: the words OR-ed). Not stored: more than 32 handle words, a handle of more than two words,
 /// a descriptor with shifted words or an array (TypeHolds could not rebuild the handle).
@@ -1922,6 +1965,22 @@ void StartSeed(bool gl_ndc, bool wait) {
         if (seed->names.empty()) {
             Log("nvn seed: no <hash>.ctrl stages in %s", dir);
             return;
+        }
+        // RT_NVN_SEED_FRESH=1 (Build's seed, build.cpp): into an empty cache, the file replaced at the end (WriteCache:
+        // .tmp, renamed) - a seed into a cache made beside a running start screen added nothing.
+        // Without it the loaded cache is kept: a seed of a few stages then says which are in
+        // it (the tests' check).
+        if (const char* fresh = std::getenv("RT_NVN_SEED_FRESH"); wait && fresh && *fresh && *fresh != '0') {
+            Disk& d = TheDisk();
+            std::lock_guard lock(d.mu);
+            d.cache = Vk().device->GetLogical().CreatePipelineCache({
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .initialDataSize = 0,
+                .pInitialData = nullptr,
+            });
+            Log("nvn seed: into an empty pipeline cache (%s is replaced when the seed is written)", d.path.string().c_str());
         }
         const char* n = std::getenv("RT_NVN_SEED_THREADS");
         seed->threads = std::min(n ? static_cast<u32>(std::strtoul(n, nullptr, 10)) : 4u,
@@ -2416,15 +2475,15 @@ Shader::TextureType TextureTypeOf(const RenderState& rs, u32 handle, bool* regis
 
 namespace {
 
-// RT_NVN_PIPELINE_THREADS=<n> (SHADER_PLAN Phase 3; default 4, at most a quarter of the host's threads; 0 or
+// RT_NVN_PIPELINE_THREADS=<n> (default 4, at most a quarter of the host's threads; 0 or
 // RT_NVN_SYNC_PIPELINES=1: built on the draw's thread, as before): new graphics pipelines are built on n worker
 // threads from a copy of the draw's state. RT_NVN_PIPELINE_WAIT=<ms> (default -1: always wait): how long the
 // draws of one frame (present to present) may wait for their pipelines in all before a draw whose pipeline is
 // not built is skipped (NotReady) - a never-seen pipeline then shows a few frames late instead of holding the
 // frame for its compile; one whose driver cache hits is usually done within the wait. A budget per frame, not per
-// draw: in the user's play run a new area brought 82 new pipelines in one frame (2026-10-23, 114 ms translating).
+// draw: in a play run a new area brought 82 new pipelines in one frame (2026-10-23, 114 ms translating).
 // Always waiting is the default since a skipped draw that the game renders only once stayed missing for good (the
-// plaza washed out to white: SHADER_PLAN Phase 3); first-time compiles are for the seed to remove (Phase 5).
+// plaza washed out to white); first-time compiles are for the seed to remove (Phase 5).
 // Translation stays serialised (StageFor's lock: drippu's translator is not known to be re-entrant); the driver's
 // library compiles run in parallel (LibraryFor). Compute pipelines are still built on the dispatch's thread (a
 // skipped dispatch can leave data later frames read).
@@ -2654,10 +2713,12 @@ void BuildCompute(ComputePipeline& p, const RenderState& rs) {
     };
     std::vector<u8> code = ReadCode(p.program);
     p.hash = CodeHash(code, p.program);
-    // translated before play (the seed's, SHADER_PLAN Phase 4) and its checks hold: no translation
+    // translated before play (the seed's) and its checks hold: no translation
     std::optional<StoredStage> stored;
+    t_stage_sources = "compute translated (store off)"; // for the pipeline's log line, as StageFor's
     if (ShaderStoreOn()) {
         stored = StoreGet(StoreKey(code, p.program, s, std::string()));
+        t_stage_sources = stored ? "compute translated (its store entry's reads differ)" : "compute translated (not in the store)";
         if (stored && !StoredHolds(*stored, rs)) stored.reset();
         if (stored && !ShaderStoreCheck()) {
             p.info = stored->info;
@@ -2665,12 +2726,17 @@ void BuildCompute(ComputePipeline& p, const RenderState& rs) {
             p.type_reads = stored->type_reads;
             FinishCompute(p, stored->spirv, DiskCache());
             TheTotals().stages_stored.fetch_add(1, std::memory_order_relaxed);
+            t_stage_sources = "compute from the store";
             return;
         }
     }
     std::vector<u32> spirv;
     MakeCompute(p, std::move(code), std::move(hooks), building_cfg, DiskCache(), stored ? &spirv : nullptr);
-    if (stored) CheckStored("compute", p.hash, *stored, spirv, p.info);
+    if (stored) {
+        CheckStored("compute", p.hash, *stored, spirv, p.info);
+        t_stage_sources = "compute translated (checking its store entry)";
+    }
+    if (!p.cbuf_reads.empty()) t_stage_sources += " pinned"; // control flow from constant words: the seed skips it
 }
 
 struct ComputeCache {

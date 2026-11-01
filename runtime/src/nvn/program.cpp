@@ -1,4 +1,4 @@
-// NVNprogram (NVN_PLAN 7.1): programs and their shader stages.
+// NVNprogram: programs and their shader stages.
 //
 // nvnProgramSetShaders gets one NVNshaderData per stage (16 bytes: the code's
 // GPU address, the control section's CPU address). The layer keeps what the
@@ -63,7 +63,7 @@ std::optional<ProgramStage> ParseControlBytes(const u8* control, u64 code, std::
         why = buf;
         return std::nullopt;
     }
-    if (major != 0x120 || minor != 0xb) { // SDK 3.5.0's 4/14 is NVN_PLAN Phase 11
+    if (major != 0x120 || minor != 0xb) { // (SDK 3.5.0's 4/14 format)
         std::snprintf(buf, sizeof buf, "control section format 0x%x/0x%x (the layer knows 0x120/0xb)", major, minor);
         why = buf;
         return std::nullopt;

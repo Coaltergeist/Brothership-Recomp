@@ -1,4 +1,4 @@
-/* FPX probe (SIMD_PLAN Phase 4 step 0): force-included into the generated code by -DRT_FPX_PROBE=ON (its own
+/* FPX probe: force-included into the generated code by -DRT_FPX_PROBE=ON (its own
    build directory). drippu's FP helper bodies call RECOMP_FPX_PROBE(1) when its host fast path was taken and
    RECOMP_FPX_PROBE(2) when not; this counts both, with the guest's FPSR/FPCR, in the runtime (fpx_probe.cpp).
    drippu defines the macro as nothing unless it is defined first. */

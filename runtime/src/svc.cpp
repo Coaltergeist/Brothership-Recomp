@@ -283,7 +283,7 @@ bool IsWaitSvc(u32 imm);
 // top 25 guest functions with their hottest sites. Time in host code a guest function calls (memory and FP
 // helpers, HLE functions) counts to that function. Implies RT_THREAD_STATS (the per-thread records).
 /// Describe(), but a symbol only when it is near (main's functions are mostly unnamed: the nearest export can
-/// be megabytes away). A main address in Ghidra: va - 0x7f04000 (handoff).
+/// be megabytes away). A main address in Ghidra: va - 0x7f04000.
 std::string NearName(u64 va) {
     std::string d = Describe(va);
     const size_t plus = d.rfind("+0x");

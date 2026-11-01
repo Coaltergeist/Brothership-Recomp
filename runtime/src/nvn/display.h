@@ -1,4 +1,4 @@
-// The NVN layer's image on the host window (NVN_PLAN 9.1 display, 9.3).
+// The NVN layer's image on the host window.
 #pragma once
 
 #include <functional>
@@ -12,7 +12,7 @@ namespace rt::nvn {
 /// with the overlay's text box on top. Nothing without a window (RT_HEADLESS=1).
 void ShowInWindow(const TextureState& t);
 
-/// The start screen's drawing (LAUNCHER_PLAN), before the game's first frame: a swapchain in plain (UNORM) colour
+/// The start screen's drawing, before the game's first frame: a swapchain in plain (UNORM) colour
 /// that can be drawn into, a render pass that clears it to black, a framebuffer per swapchain image. UiTarget gives
 /// the render pass, the image count and format (ImGui's pipeline is made for them); ShowUi records `draw` inside
 /// that render pass (with QueueLock held: ImGui uploads textures with a submission of its own) and presents, giving

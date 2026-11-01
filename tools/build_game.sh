@@ -1,5 +1,5 @@
 #!/bin/bash
-# The game module from a lift, with nothing but clang and lld (BUILD_PLAN Phase 2): the commands the start screen's
+# The game module from a lift, with nothing but clang and lld: the commands the start screen's
 # builder will run on a player's machine (Phase 3). No Windows SDK, MinGW or glibc headers: the lifted code is built
 # freestanding (clang's own headers + runtime/src/game/freestanding/), the module needs no C library
 # (runtime/src/game/libc.c). Load it with RT_GAME_MODULE=<file> or put it beside an NXRT_GAME=module nxrt.

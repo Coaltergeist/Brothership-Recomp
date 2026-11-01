@@ -1,4 +1,4 @@
-// CPU write tracking for guest memory (BUFFER_CACHE_PLAN Phase 1, Windows A: page protection).
+// CPU write tracking for guest memory (Windows A: page protection).
 //
 // A user (the NVN layer's buffer cache, Phase 2) asks whether guest pages changed since it last copied them:
 //

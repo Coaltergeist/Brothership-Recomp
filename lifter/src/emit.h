@@ -18,22 +18,22 @@ struct EmitOptions {
     bool fpx = true;          // drippu's verified native-FP fast paths
     // FP/SIMD data-processing instructions as calls to one helper per encoding (fp_<word>, drippu's own
     // translation as its body, in funcs_fp_*.c) instead of the body inline in every function: the same
-    // semantics, far smaller functions (docs/BUILD_TIME.md). The default since 2026-10-17
+    // semantics, far smaller functions. The default since 2026-10-17
     // (--no-fp-helpers: inline, as before).
     bool fp_helpers = true;
-    // Integer Advanced SIMD as host vector code inline (simd.cpp, SIMD_PLAN.md); what it does not cover
+    // Integer Advanced SIMD as host vector code inline (simd.cpp); what it does not cover
     // keeps drippu's translation (--no-simd: never used).
     bool simd = true;
     // Guest loads and stores: the common case inline (fastmem.cpp, nx_mem.h). Opt-in (--inline-mem) until the
-    // load/store difftest passes (handoff); off: drippu's helpers at every access, as before.
+    // load/store difftest passes; off: drippu's helpers at every access, as before.
     bool inline_mem = false;
-    // Guest loads and stores as plain host accesses at the runtime's fixed window (fastmem.cpp DirectHeader,
-    // old_plans/FASTMEM_PLAN.md). The default since 2026-10-19 (measured: FASTMEM_PLAN Phase 3); needs the NVN layer and
+    // Guest loads and stores as plain host accesses at the runtime's fixed window (fastmem.cpp DirectHeader).
+    // The default since 2026-10-19 (measured); needs the NVN layer and
     // parallel threads. --no-direct-mem: the checked helpers, for RT_GIL=1, RT_NO_FASTMEM and the driver seam.
     bool direct_mem = true;
     size_t max_file_bytes = 4 << 20;
     u64 load_base = 0;        // linked program: the address its relocations assume (0 = relocatable)
-    // Mods switched at run time (--mod, PORT_PLAN B2): nx_table.c's nx_mod_table lists them with their writes
+    // Mods switched at run time (--mod): nx_table.c's nx_mod_table lists them with their writes
     // (program-relative), and each code word one changes is lifted twice, `if (nx_mod_on[k])` choosing.
     struct Mod {
         std::string name;

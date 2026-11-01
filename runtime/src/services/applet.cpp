@@ -167,8 +167,8 @@ public:
             ctx.Push<s64>(0);
         });
         // Saves are host folders without a size limit, so growing one always succeeds and its size is ample.
-        // Brothership sends 25 only for an existing save when its config SaveGameSizeMaxMB is not 0
-        // (ARCHITECTURE "The save code"); not seen in play so far.
+        // Brothership sends 25 only for an existing save when its config SaveGameSizeMaxMB is not 0;
+        // not seen in play so far.
         Register(25, "ExtendSaveData", [](IpcContext& ctx) { // (type, uid, normal size, journal size) -> bytes still required
             const u8 type = ctx.Pop<u8>();
             ctx.Pop<u64>(), ctx.Pop<u64>(); // UserId (Pop aligns)

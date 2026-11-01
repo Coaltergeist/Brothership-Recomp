@@ -1,5 +1,5 @@
 // Shim for drippu's recompiler store-guard hook (core/arm/recomp). drippu's
-// recompiled code checks stores into device-mapped pages; switch-recomp's
+// recompiled code checks stores into device-mapped pages; our
 // lifted code has no such guards yet, so nothing is watched.
 #pragma once
 #include <cstddef>

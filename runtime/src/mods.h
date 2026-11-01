@@ -1,4 +1,4 @@
-// The player's mods (PORT_PLAN §6 B2, B3): RT_MODS names the enabled ones (a player option), RT_MODS_DIR is the
+// The player's mods: RT_MODS names the enabled ones (a player option), RT_MODS_DIR is the
 // mods folder (default: options::UserDir()/mods), one folder per mod in the layout yuzu and our mods/ use: <name>/exefs/ (patches, lifted in with
 // `nxrecomp --mod`: the build carries them, rt.cpp ApplyMods switches them) and <name>/romfs/ (files layered over
 // the game's RomFS at run time, services/fs.cpp).

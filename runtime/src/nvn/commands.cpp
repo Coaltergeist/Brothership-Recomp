@@ -1,4 +1,4 @@
-// The NVNcommandBuffer calls that record commands (NVN_PLAN 5.2): one record
+// The NVNcommandBuffer calls that record commands: one record
 // per call (nvn.h: Op), written by cmdbuf.cpp into command memory, or into
 // control memory where NVN keeps the call there (ControlRecord, with NVN's
 // size for it, read from the SDK). Recording never calls Vulkan; submission

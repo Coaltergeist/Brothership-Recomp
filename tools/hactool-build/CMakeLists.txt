@@ -1,5 +1,5 @@
 # hactool (third_party/hactool, SciresM, ISC; with its bundled mbedtls, Apache-2.0) for the game builder's unpack stage
-# (RELEASE_PLAN Phase 2: the player's .nsp files and keys -> exefs/ + romfs/). Its Makefile's sources and defines;
+# (the player's .nsp files and keys -> exefs/ + romfs/). Its Makefile's sources and defines;
 # Windows (clang-cl, tools/cross): Microsoft's C library has no getopt_long - ours in compat/. tools/make_toolchain.sh
 # builds it into the release's tools/.
 cmake_minimum_required(VERSION 3.20)
