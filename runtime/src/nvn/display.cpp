@@ -7,8 +7,8 @@
 // the overlay's text box (overlay.h)
 // copied over its top-left corner, and the image presented. The swapchain has the texture's sRGB-ness
 // (Brothership's window textures are BGRA8 sRGB, 0x9c), so the bytes reach the screen as the game wrote
-// them, as in the captures. Present mode from RT_VSYNC as on the driver path (default mailbox: the game
-// paces itself on the window model, window.cpp; FIFO where mailbox is missing). Re-created when the
+// them, as in the captures. Present mode from RT_VSYNC as on the driver path (on, the default: mailbox - the
+// game paces itself on the window model, window.cpp; FIFO where mailbox is missing; off: immediate). Re-created when the
 // window changes size or the driver says so.
 //
 // Slow presents: whenever a step of showing a frame (the display lock, a new swapchain, the wait for the
@@ -34,6 +34,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -65,6 +66,10 @@ struct Display {
     bool srgb = false, stale = false;
     std::array<Frame, kFramesInFlight> frames;
     u32 next = 0;
+    // The start screen's (ShowUi): a render pass clearing the image, a view and framebuffer per swapchain image
+    Vulkan::vk::RenderPass ui_pass;
+    std::vector<Vulkan::vk::ImageView> ui_views;
+    std::vector<Vulkan::vk::Framebuffer> ui_framebuffers;
 };
 
 Display& D() {
@@ -72,16 +77,15 @@ Display& D() {
     return d;
 }
 
+/// RT_VSYNC=on (default): mailbox, no tearing and no wait for the monitor (the game paces itself); off: immediate,
+/// may tear. Each falls back to the next of mailbox / FIFO the driver has (FIFO is always there).
 VkPresentModeKHR PresentMode(const std::vector<VkPresentModeKHR>& modes) {
     const char* v = options::Get("RT_VSYNC");
-    const std::string want = v ? v : "mailbox";
-    const VkPresentModeKHR m = want == "fifo"        ? VK_PRESENT_MODE_FIFO_KHR
-                               : want == "immediate" ? VK_PRESENT_MODE_IMMEDIATE_KHR
-                                                     : VK_PRESENT_MODE_MAILBOX_KHR;
-    for (VkPresentModeKHR x : modes) {
-        if (x == m) return m;
-    }
-    return VK_PRESENT_MODE_FIFO_KHR; // always there
+    const bool off = v && std::strcmp(v, "off") == 0;
+    const auto has = [&](VkPresentModeKHR m) { return std::find(modes.begin(), modes.end(), m) != modes.end(); };
+    if (off && has(VK_PRESENT_MODE_IMMEDIATE_KHR)) return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    if (has(VK_PRESENT_MODE_MAILBOX_KHR)) return VK_PRESENT_MODE_MAILBOX_KHR;
+    return VK_PRESENT_MODE_FIFO_KHR;
 }
 
 /// (Re)creates the swapchain; false while the window has no area (minimised).
@@ -114,6 +118,8 @@ bool Create(Display& d, bool srgb) {
                                                   ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                                                   : static_cast<VkCompositeAlphaFlagBitsKHR>(
                                                         caps.supportedCompositeAlpha & -caps.supportedCompositeAlpha);
+    d.ui_framebuffers.clear(); // (they use the old images' views)
+    d.ui_views.clear();
     Vulkan::vk::SwapchainKHR old = std::move(d.swapchain);
     d.swapchain = dev.GetLogical().CreateSwapchainKHR({
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -125,7 +131,7 @@ bool Create(Display& d, bool srgb) {
         .imageColorSpace = format.colorSpace,
         .imageExtent = extent,
         .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, // (the start screen draws)
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0,
         .pQueueFamilyIndices = nullptr,
@@ -372,6 +378,207 @@ void ShowInWindow(const TextureState& t) {
     }
     if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) d.stale = true;
     else if (presented != VK_SUCCESS) Log("nvn: window: vkQueuePresentKHR: VkResult %d", presented);
+}
+
+
+namespace {
+
+/// The start screen's swapchain: plain (UNORM) colour, as ImGui's colours are meant, and its render pass and
+/// framebuffers. False while the window has no area.
+bool PrepareUi(Display& d) {
+    if (!d.frames[0].pool) InitFrames(d);
+    if (!d.swapchain || d.stale || d.srgb) {
+        if (!Create(d, false)) return false;
+    }
+    const auto& logical = Vk().device->GetLogical();
+    if (!d.ui_pass) {
+        const VkAttachmentDescription color{
+            .flags = 0,
+            .format = d.format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        };
+        const VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        const VkSubpassDescription subpass{
+            .flags = 0,
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .inputAttachmentCount = 0,
+            .pInputAttachments = nullptr,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &ref,
+            .pResolveAttachments = nullptr,
+            .pDepthStencilAttachment = nullptr,
+            .preserveAttachmentCount = 0,
+            .pPreserveAttachments = nullptr,
+        };
+        // the image is acquired (the semaphore waits at this stage) before the clear writes it
+        const VkSubpassDependency acquire{
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = 0,
+        };
+        d.ui_pass = logical.CreateRenderPass({
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .attachmentCount = 1,
+            .pAttachments = &color,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+            .dependencyCount = 1,
+            .pDependencies = &acquire,
+        });
+    }
+    if (d.ui_framebuffers.size() != d.images.size()) {
+        d.ui_framebuffers.clear();
+        d.ui_views.clear();
+        for (VkImage image : d.images) {
+            d.ui_views.push_back(logical.CreateImageView({
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .image = image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = d.format,
+                .components = {},
+                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+            }));
+            const VkImageView view = *d.ui_views.back();
+            d.ui_framebuffers.push_back(logical.CreateFramebuffer({
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .renderPass = *d.ui_pass,
+                .attachmentCount = 1,
+                .pAttachments = &view,
+                .width = d.extent.width,
+                .height = d.extent.height,
+                .layers = 1,
+            }));
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool UiTarget(VkRenderPass* pass, u32* images, VkFormat* format) {
+    if (!Vk().surface) return false;
+    Display& d = D();
+    std::lock_guard lock(d.mu);
+    if (!PrepareUi(d)) return false;
+    *pass = *d.ui_pass;
+    *images = static_cast<u32>(d.images.size());
+    *format = d.format;
+    return true;
+}
+
+bool ShowUi(const std::function<void(VkCommandBuffer)>& draw, VkExtent2D* extent) {
+    if (!Vk().surface) return false;
+    Display& d = D();
+    std::lock_guard lock(d.mu);
+    if (d.failed) return false;
+    if (!PrepareUi(d)) return false;
+    *extent = d.extent;
+    Frame& f = d.frames[d.next];
+    d.next = (d.next + 1) % kFramesInFlight;
+    f.done.Wait();
+    f.shown.reset();
+    const auto& dev = *Vk().device;
+    const auto& logical = dev.GetLogical();
+    u32 index = 0;
+    const VkResult acquired = logical.AcquireNextImageKHR(*d.swapchain, ~0ULL, *f.acquired, VK_NULL_HANDLE, &index);
+    if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+        d.stale = true;
+        return false;
+    }
+    if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) {
+        Log("nvn: window: vkAcquireNextImageKHR failed (VkResult %d) on the start screen", acquired);
+        d.failed = true;
+        return false;
+    }
+    if (acquired == VK_SUBOPTIMAL_KHR) d.stale = true;
+    f.done.Reset();
+    const Vulkan::vk::CommandBuffer cmd(f.buffers[0], dev.GetDispatchLoader());
+    cmd.Begin({
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr,
+    });
+    const VkClearValue clear{.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
+    cmd.BeginRenderPass(
+        {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = nullptr,
+            .renderPass = *d.ui_pass,
+            .framebuffer = *d.ui_framebuffers[index],
+            .renderArea = {{0, 0}, d.extent},
+            .clearValueCount = 1,
+            .pClearValues = &clear,
+        },
+        VK_SUBPASS_CONTENTS_INLINE);
+    {
+        std::lock_guard queue_lock(QueueLock()); // (ImGui uploads its textures with a submission and a queue wait)
+        draw(*cmd);
+    }
+    cmd.EndRenderPass();
+    cmd.End();
+    const VkSemaphore wait = *f.acquired, signal = *d.rendered[index];
+    const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkSubmitInfo submit{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &wait,
+        .pWaitDstStageMask = &stage,
+        .commandBufferCount = 1,
+        .pCommandBuffers = cmd.address(),
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &signal,
+    };
+    const VkSwapchainKHR swapchain = *d.swapchain;
+    const VkPresentInfoKHR present{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .pNext = nullptr,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &signal,
+        .swapchainCount = 1,
+        .pSwapchains = &swapchain,
+        .pImageIndices = &index,
+        .pResults = nullptr,
+    };
+    VkResult presented;
+    {
+        std::lock_guard queue_lock(QueueLock());
+        if (dev.GetGraphicsQueue().Submit(submit, *f.done) != VK_SUCCESS) Fatal("nvn: window: vkQueueSubmit failed");
+        presented = dev.GetPresentQueue().Present(present);
+    }
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) d.stale = true;
+    return true;
+}
+
+void EndUi() {
+    if (!Vk().surface) return;
+    Display& d = D();
+    std::lock_guard lock(d.mu);
+    {
+        std::lock_guard queue_lock(QueueLock());
+        Vk().device->GetLogical().WaitIdle();
+    }
+    d.ui_framebuffers.clear();
+    d.ui_views.clear();
+    d.ui_pass = {};
+    d.stale = true; // the game's first frame makes a new swapchain: with the present mode (VSync) chosen on the screen
 }
 
 } // namespace rt::nvn

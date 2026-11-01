@@ -26,6 +26,20 @@ std::string Hex(u64 v) {
 }
 
 std::string FnName(u64 off) { return "f_" + Hex(off); }
+
+// A mod's name (a folder name) inside a C string literal, and inside a comment.
+std::string CString(const std::string& s) {
+    std::string r;
+    for (char ch : s) {
+        if (ch == '"' || ch == '\\') r += '\\';
+        r += static_cast<unsigned char>(ch) < 0x20 ? '?' : ch;
+    }
+    return r;
+}
+std::string CComment(std::string s) {
+    for (size_t at; (at = s.find("*/")) != std::string::npos;) s.replace(at, 2, "* /");
+    return s;
+}
 std::string Abs(u64 off) { return "(g_module_base+0x" + Hex(off) + "ULL)"; }
 
 // Runtime contract shared by every generated file (see runtime/src/rt.h).
@@ -81,7 +95,11 @@ public:
             if (labels.count(pc)) {
                 out_ += "L_" + Hex(pc) + ":;\n";
             }
-            Instruction(pc, img_.Word(pc));
+            if (auto m = opts_.mod_words.find(pc); m != opts_.mod_words.end()) {
+                ModdedInstruction(pc, m->second);
+            } else {
+                Instruction(pc, img_.Word(pc));
+            }
             ++stats_.instructions;
         }
         // Falling off the end of the range continues in the next function.
@@ -101,6 +119,56 @@ public:
 
 private:
     void Line(const std::string& s) { out_ += "    " + s + "\n"; }
+
+    // A code word changed by run-time mods (EmitOptions::mods): each mod's version behind its switch, the last mod
+    // first (the runtime writes enabled mods in order, so the last one's bytes are in memory), the original last.
+    // Discovery saw only the original, so a mod's word must not transfer control; the original may (a mod that
+    // NOPs a branch), unless the function would then run off its end.
+    void ModdedInstruction(u64 pc, const std::vector<std::pair<size_t, u32>>& versions) {
+        const u32 orig = img_.Word(pc);
+        for (const auto& [mod, word] : versions) {
+            if (TransfersControl(word)) {
+                throw std::runtime_error("mod " + opts_.mods[mod].name + ": the word at 0x" + Hex(pc) +
+                                         " becomes a branch, call or exception: it cannot be switched at run "
+                                         "time (bake it in with --patch)");
+            }
+        }
+        if (IsUnconditionalTransfer(orig) && pc + 4 >= f_->end) {
+            throw std::runtime_error("mods change the function's last word at 0x" + Hex(pc) +
+                                     " into one that falls through: bake them in with --patch");
+        }
+        Line("{ extern unsigned char nx_mod_on[];");
+        for (size_t k = versions.size(); k-- > 0;) {
+            Line(std::string(k + 1 == versions.size() ? "if" : "} else if") + " (nx_mod_on[" +
+                 std::to_string(versions[k].first) + "]) { /* mod " + CComment(opts_.mods[versions[k].first].name) + " */");
+            out_ += Capture(pc, versions[k].second);
+        }
+        Line("} else {");
+        out_ += Capture(pc, orig);
+        Line("} }");
+        ++stats_.mod_sites;
+    }
+
+    std::string Capture(u64 pc, u32 word) {
+        std::string saved;
+        saved.swap(out_);
+        Instruction(pc, word);
+        std::string body;
+        body.swap(out_);
+        out_.swap(saved);
+        return body;
+    }
+
+    // Branches, calls, returns, exceptions (SVC, BRK, HVC, SMC) and clang's trap word: what discovery follows.
+    static bool TransfersControl(u32 i) {
+        return (i & 0x7C000000) == 0x14000000 ||  // B, BL
+               (i & 0xFE000000) == 0x54000000 ||  // B.cond
+               (i & 0x7E000000) == 0x34000000 ||  // CBZ, CBNZ
+               (i & 0x7E000000) == 0x36000000 ||  // TBZ, TBNZ
+               (i & 0xFE000000) == 0xD6000000 ||  // BR, BLR, RET, ERET
+               (i & 0xFF000000) == 0xD4000000 ||  // exception generation
+               i == 0xE7FFDEFE;
+    }
 
     // Branch to a module offset: a goto inside this function, otherwise a tail call.
     std::string Goto(u64 t) {
@@ -417,6 +485,29 @@ EmitStats Emit(const Image& img, const Analysis& a, const EmitOptions& opts) {
     table += "};\nconst unsigned long rt_segment_count = " + std::to_string(img.segments.size()) + ";\n";
     if (opts.direct_mem) { // the runtime checks it against its window (rt.cpp); absent: the checked helpers
         table += "const unsigned long long nx_mem_direct_base = 0x" + Hex(fastmem::kDirectBase) + "ULL;\n";
+    }
+    if (!opts.mods.empty()) { // the runtime reads it through a weak symbol (rt.cpp): absent, no mods
+        table += "\n/* Mods switched at run time (--mod): the runtime sets nx_mod_on and writes the enabled ones' bytes. */\n"
+                 "typedef struct NxModWrite { unsigned long long offset; unsigned long long size; const unsigned char* bytes; } NxModWrite;\n"
+                 "typedef struct NxMod { const char* name; unsigned long long first_write, write_count; } NxMod;\n"
+                 "typedef struct NxModTable { unsigned long long count; const NxMod* mods; const NxModWrite* writes; unsigned char* on; } NxModTable;\n";
+        table += "unsigned char nx_mod_on[" + std::to_string(opts.mods.size()) + "];\n";
+        std::string writes = "static const NxModWrite nx_mod_writes[] = {\n", mods = "static const NxMod nx_mods[] = {\n";
+        size_t n = 0;
+        for (const auto& m : opts.mods) {
+            mods += "    {\"" + CString(m.name) + "\", " + std::to_string(n) + ", " + std::to_string(m.writes.size()) + "},\n";
+            for (const auto& [offset, bytes] : m.writes) {
+                table += "static const unsigned char nx_mod_bytes_" + std::to_string(n) + "[] = {";
+                for (u8 b : bytes) table += std::to_string(b) + ",";
+                table += "};\n";
+                writes += "    {0x" + Hex(offset) + "ULL, " + std::to_string(bytes.size()) + ", nx_mod_bytes_" +
+                          std::to_string(n) + "},\n";
+                ++n;
+            }
+        }
+        table += writes + "};\n" + mods + "};\n";
+        table += "const NxModTable nx_mod_table = {" + std::to_string(opts.mods.size()) +
+                 ", nx_mods, nx_mod_writes, nx_mod_on};\n";
     }
     WriteFile(dir + "nx_table.c", table);
 

@@ -30,6 +30,11 @@ void Init();
 /// Main thread: every SDL event (only keyboard and gamepad ones are used).
 void OnEvent(const SDL_Event& e);
 
+/// Whether a controller's bottom face button is the game's A with the button layout chosen (RT_BUTTONS: by Switch
+/// positions the right one is; by labels an Xbox pad's bottom one is), for the start screen's confirm / back. Main
+/// thread.
+bool BottomConfirms();
+
 /// Any thread: the latest state (all zero without a window).
 Pad Current();
 

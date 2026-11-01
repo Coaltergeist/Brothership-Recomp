@@ -11,6 +11,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 #include <filesystem>
 
 namespace rt::platform {
@@ -97,6 +99,36 @@ private:
 /// high-resolution waitable timer per thread (std::this_thread if it cannot be made). POSIX: std::this_thread.
 void SleepUntil(std::chrono::steady_clock::time_point deadline);
 inline void SleepFor(std::chrono::nanoseconds duration) { SleepUntil(std::chrono::steady_clock::now() + duration); }
+
+/// Where stdout and stderr go when the program has none (Windows, a build without a console window - RELEASE_PLAN:
+/// started by a double-click): the console of the terminal it was started from, if any, else `log_file` (the previous
+/// one kept as <name>.old.log). Output that already goes somewhere (a console, a redirect: the bench scripts) is left
+/// alone. POSIX: nothing.
+void AttachOutput(const std::string& log_file);
+
+/// A child process (the game builder's tools, build/build.h): `args` (UTF-8; args[0] the program's path), its stdout and
+/// stderr to the file `log` (made or emptied), no stdin, no window of its own (Windows: CREATE_NO_WINDOW, so a program
+/// without a console starts its 573 compile jobs invisibly; SDL's processes do that only in a mode that loses the
+/// exit code), and nothing else of ours inherited. Null (`error`: why) when it could not start.
+/// `env`: NAME=value entries added to (or replacing in) this process's environment for the child only.
+struct Child;
+Child* StartChild(const std::vector<std::string>& args, const std::string& log, std::string* error,
+                  const std::vector<std::string>& env = {});
+/// Whether it has ended (without waiting); `code`: its exit code - Windows: the process's (0xC... for a crash),
+/// POSIX: the status, or -signal when a signal ended it.
+bool ChildDone(Child* c, int* code);
+/// Ends it (if running) and waits for it.
+void KillChild(Child* c);
+/// Frees it (after ChildDone said so, or KillChild).
+void FreeChild(Child* c);
+
+/// This program's own file (UTF-8): what the builder's seed stage and a restart into the game start again, whatever
+/// the release names it (BrothershipRecomp.exe; developer builds: nxrt).
+std::string ExecutablePath();
+
+/// The physical memory free for new processes now, in bytes (Windows: available physical memory; Linux:
+/// MemAvailable); 0 when unknown. The game builder's job count (build.h).
+uint64_t FreeMemory();
 
 /// The OS id of the calling thread (as debuggers and profilers show it).
 uint64_t CurrentThreadId();

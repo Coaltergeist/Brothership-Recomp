@@ -267,7 +267,7 @@ void ThreadMain(std::shared_ptr<KThread> t) {
     try {
         if (g_parallel) lock.unlock(); // guest code runs without the kernel lock
         for (;;) {
-            rt_jump(&t->ctx, t->ctx.pc);
+            rt_host_jump(&t->ctx, t->ctx.pc);
         }
     } catch (const ThreadExit&) {
     }

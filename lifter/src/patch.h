@@ -32,4 +32,20 @@ std::vector<PatchFile> LoadPatches(const std::string& path);
 /// initialised bytes. Returns a report: a summary line per applied file, then one line per write.
 std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Image>& modules);
 
+/// A write of a mod switched at run time (--mod, PORT_PLAN B2): recorded, not applied to the lifted bytes. The
+/// runtime writes it into the loaded image when the mod is on, and the lift carries both versions of each code
+/// word it changes.
+struct ModWrite {
+    size_t mod;    // index into the --mod sources
+    size_t module; // index into the modules
+    u64 offset;    // module-relative
+    std::vector<u8> bytes;
+    bool code;
+};
+
+/// As ApplyPatches, but records the writes (patches[i] belongs to mod mod_of[i]) instead of applying them. A write
+/// that overlaps a relocation is refused (the loader relocates after patching; bake such a mod in with --patch).
+std::string RecordMods(const std::vector<PatchFile>& patches, const std::vector<size_t>& mod_of,
+                       const std::vector<Image>& modules, std::vector<ModWrite>& out);
+
 } // namespace nxrecomp

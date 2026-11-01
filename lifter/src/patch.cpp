@@ -224,22 +224,31 @@ std::vector<PatchFile> LoadPatches(const std::string& path) {
     return out;
 }
 
-std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Image>& modules) {
+namespace {
+
+// ApplyPatches and RecordMods: `record` null applies the writes to the modules, otherwise records them (the
+// file's mod from mod_of).
+std::string Process(const std::vector<PatchFile>& patches, std::vector<Image>& modules,
+                    const std::vector<size_t>* mod_of, std::vector<ModWrite>* record) {
     std::string report, detail;
     std::vector<std::string> applied_sources;
     char buf[256];
-    for (const PatchFile& pf : patches) {
+    for (size_t pi = 0; pi < patches.size(); ++pi) {
+        const PatchFile& pf = patches[pi];
         Image* m = nullptr;
-        for (Image& img : modules) {
+        size_t mi = 0;
+        for (size_t k = 0; k < modules.size(); ++k) {
+            Image& img = modules[k];
             if (!img.build_id.empty() && pf.build_id.size() <= img.build_id.size() &&
                 std::equal(pf.build_id.begin(), pf.build_id.end(), img.build_id.begin())) {
                 if (m) throw std::runtime_error(pf.path + ": build id matches both " + m->name + " and " + img.name);
                 m = &img;
+                mi = k;
             }
         }
         if (!m) {
-            std::snprintf(buf, sizeof buf, "patch %s: build id %s matches no module, skipped\n", pf.path.c_str(),
-                          Hex(pf.build_id).c_str());
+            std::snprintf(buf, sizeof buf, "%s %s: build id %s matches no module, skipped\n", record ? "mod" : "patch",
+                          pf.path.c_str(), Hex(pf.build_id).c_str());
             report += buf;
             continue;
         }
@@ -264,7 +273,19 @@ std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Imag
             }
             const u64 off = w.ips_offset - header;
             const std::vector<u8> old(m->mem.begin() + off, m->mem.begin() + off + n);
-            std::copy(w.bytes.begin(), w.bytes.end(), m->mem.begin() + off);
+            if (record) {
+                for (const Relocation& r : m->relocations) {
+                    if (r.offset < off + n && off < r.offset + 8) {
+                        std::snprintf(buf, sizeof buf, ": the write at %s+0x%llx overlaps a relocation at 0x%llx: "
+                                      "it cannot be switched at run time (bake it in with --patch)",
+                                      m->name.c_str(), (unsigned long long)off, (unsigned long long)r.offset);
+                        throw std::runtime_error(pf.path + buf);
+                    }
+                }
+                record->push_back({(*mod_of)[pi], mi, off, w.bytes, seg->exec});
+            } else {
+                std::copy(w.bytes.begin(), w.bytes.end(), m->mem.begin() + off);
+            }
             bytes += n;
             changed += !std::equal(old.begin(), old.end(), w.bytes.begin());
             code += seg->exec;
@@ -273,9 +294,9 @@ std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Imag
                           Hex(w.bytes, 32).c_str());
             detail += buf;
         }
-        std::snprintf(buf, sizeof buf, "patch %s: %s (build id %s…): %zu writes (%zu change something, %zu in code), %zu bytes\n",
-                      pf.path.c_str(), m->name.c_str(), Hex(m->build_id, 8).c_str(), pf.writes.size(), changed, code,
-                      bytes);
+        std::snprintf(buf, sizeof buf, "%s %s: %s (build id %s…): %zu writes (%zu change something, %zu in code), %zu bytes\n",
+                      record ? "mod" : "patch", pf.path.c_str(), m->name.c_str(), Hex(m->build_id, 8).c_str(),
+                      pf.writes.size(), changed, code, bytes);
         report += buf;
         if (std::find(applied_sources.begin(), applied_sources.end(), pf.source) == applied_sources.end()) {
             applied_sources.push_back(pf.source);
@@ -287,6 +308,18 @@ std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Imag
         }
     }
     return report + detail;
+}
+
+} // namespace
+
+std::string ApplyPatches(const std::vector<PatchFile>& patches, std::vector<Image>& modules) {
+    return Process(patches, modules, nullptr, nullptr);
+}
+
+std::string RecordMods(const std::vector<PatchFile>& patches, const std::vector<size_t>& mod_of,
+                       const std::vector<Image>& modules, std::vector<ModWrite>& out) {
+    // Process only reads the modules when it records.
+    return Process(patches, const_cast<std::vector<Image>&>(modules), &mod_of, &out);
 }
 
 } // namespace nxrecomp

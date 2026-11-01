@@ -11,28 +11,23 @@
 
 extern "C" {
 #include "recomp_runtime.h"
+#include "game/game.h"
 
-// Emitted by the lifter (nx_table.c).
+// Emitted by the lifter (nx_table.c), reached through rt::Game() (game/game.h).
 typedef struct RtFunc {
     uint64_t offset;
     void (*fn)(GuestContext*);
 } RtFunc;
-extern const RtFunc rt_funcs[];
-extern const unsigned long rt_func_count;
 typedef struct RtSegment {
     uint64_t offset, size;
     uint32_t perm; // 1 read, 2 write, 4 execute
 } RtSegment;
-extern const RtSegment rt_segments[];
-extern const unsigned long rt_segment_count;
-extern const uint64_t rt_image_size, rt_entry, rt_load_base;
 
-// Called from generated code.
-extern thread_local uint64_t rt_trace_pc;
-void rt_svc(GuestContext* c, uint32_t imm);
-void rt_jump(GuestContext* c, uint64_t target);
-void rt_break(GuestContext* c, uint32_t imm, uint64_t pc);
-BlockFn recomp_lookup(uint64_t pc);
+// What the lifted code calls (its rt_svc, rt_jump, rt_break, recomp_lookup forward here: game/entry.c, NxHost).
+void rt_host_svc(GuestContext* c, uint32_t imm);
+void rt_host_jump(GuestContext* c, uint64_t target);
+void rt_host_break(GuestContext* c, uint32_t imm, uint64_t pc);
+BlockFn rt_host_lookup(uint64_t pc);
 }
 
 namespace rt {
@@ -43,6 +38,14 @@ using u32 = uint32_t;
 using s32 = int32_t;
 using u64 = uint64_t;
 using s64 = int64_t;
+
+/// The lifted code's tables (game/game.h): linked in (NXRT_GAME=static) or from the loaded module (module). Valid
+/// from LoadGame() on (main, before the image is read).
+const NxGame& Game();
+/// The lifted code: linked in, or the game module - RT_GAME_MODULE, else `module`, else beside the executable. A
+/// module whose NxGame.id is not `want_id` (when given: a player start, build.h) stops the run.
+void LoadGame(const char* module = nullptr, const char* want_id = nullptr);
+bool GameLoaded(); // (the crash report: a crash before LoadGame)
 
 // Guest address space: Horizon's 39-bit layout (NPDM address-space type 3).
 // One host reservation covers all of it; only the regions mapped through Memory
@@ -220,6 +223,8 @@ void MarkOverridden(const RtFunc* f);
 bool Overridden(const RtFunc* f);
 /// Guest addresses of every symbols.txt entry named `name`.
 std::vector<u64> FindSymbol(const std::string& name);
+/// Whether a symbols.txt was loaded (a player start loads it when Play is chosen).
+bool HaveSymbols();
 /// Seconds since the runtime started (for timing logs).
 double Uptime();
 [[noreturn]] void Exit(int code);

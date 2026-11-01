@@ -92,11 +92,10 @@ void Init() {
     // In a window, show the newest frame without waiting for the monitor: the
     // game paces itself on our vsync event (vi), and a second wait here would
     // distort the frame-rate measurements. drippu falls back to FIFO if needed.
+    // RT_VSYNC=off: immediate (may tear).
     const char* v = options::Get("RT_VSYNC");
-    const std::string vsync = v ? v : "mailbox";
-    Settings::values.vsync_mode.SetValue(vsync == "fifo"        ? Settings::VSyncMode::Fifo
-                                         : vsync == "immediate" ? Settings::VSyncMode::Immediate
-                                                                : Settings::VSyncMode::Mailbox);
+    Settings::values.vsync_mode.SetValue(v && std::string(v) == "off" ? Settings::VSyncMode::Immediate
+                                                                     : Settings::VSyncMode::Mailbox);
 
     s.device_memory.buffer.base = g_mem.DeviceBacking();
     s.host1x.emplace(s.system);

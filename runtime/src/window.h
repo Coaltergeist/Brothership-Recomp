@@ -14,6 +14,7 @@
 namespace Core::Frontend {
 class EmuWindow;
 }
+struct SDL_Window;
 
 namespace rt::window {
 
@@ -21,6 +22,13 @@ namespace rt::window {
 /// code starts. Returns whether a window is open.
 bool Open();
 bool IsOpen();
+
+/// Sets the window mode and size again from the options and chooses the resolution again (the start screen may have
+/// changed them). Before guest code starts.
+void Reapply();
+
+/// The SDL window (the start screen draws in it), or nullptr headless.
+SDL_Window* Sdl();
 
 /// The EmuWindow video_core draws to (the window, or the headless stand-in).
 Core::Frontend::EmuWindow& Emu();

@@ -151,7 +151,6 @@ namespace {
 void Svc(GuestContext* c, uint32_t imm);
 }
 
-extern "C" thread_local uint64_t rt_trace_pc; // rt.cpp (the lift's --trace-pc)
 
 namespace {
 // RT_TRACE_PRESENT: each thread's time in SVCs (with the kernel lock's wait), by SVC, for TakeSvcTimes.
@@ -336,12 +335,12 @@ void GuestProfiler(std::vector<std::string> match) {
             const auto k = kinds[s];
             const u64 total = k[0] + k[1] + k[2];
             if (!total) continue;
-            // sites -> functions (rt_funcs is sorted by offset)
+            // sites -> functions (NxGame::funcs is sorted by offset)
             std::map<u64, std::pair<u64, std::vector<std::pair<u64, u64>>>> funcs; // start -> (samples, sites)
             for (const auto& [pc, n] : sites) {
-                const RtFunc* end = rt_funcs + rt_func_count;
-                const RtFunc* it = std::upper_bound(rt_funcs, end, pc, [](u64 v, const RtFunc& f) { return v < f.offset; });
-                const u64 start = it == rt_funcs ? 0 : (it - 1)->offset;
+                const RtFunc* end = rt::Game().funcs + rt::Game().func_count;
+                const RtFunc* it = std::upper_bound(rt::Game().funcs, end, pc, [](u64 v, const RtFunc& f) { return v < f.offset; });
+                const u64 start = it == rt::Game().funcs ? 0 : (it - 1)->offset;
                 auto& f = funcs[start];
                 f.first += n;
                 f.second.push_back({n, pc});
@@ -410,7 +409,7 @@ ThreadSvcStats* MyThreadStats() {
         t_thread_stats = new ThreadSvcStats;
         t_thread_stats->thread = t;
         t_thread_stats->since_ns = NowNs();
-        t_thread_stats->trace_pc = &rt_trace_pc;
+        t_thread_stats->trace_pc = rt::Game().trace_pc();
         std::lock_guard lock(g_thread_stats_mu);
         g_thread_stats.push_back(t_thread_stats);
     }
@@ -595,7 +594,7 @@ void RunHostWait(HostWaitKind kind, const std::function<void()>& f) {
 
 // SVCs run under the kernel lock (threads.h). ExitThread leaves through
 // an exception (ThreadExit, threads.cpp) with the lock held; the thread's exit path expects that.
-extern "C" void rt_svc(GuestContext* c, uint32_t imm) {
+extern "C" void rt_host_svc(GuestContext* c, uint32_t imm) {
     const bool timed = (SvcTimesOn() || ThreadStatsOn()) && imm < 0x80;
     const u64 t0 = timed ? NowNs() : 0;
     ThreadSvcStats* stats = timed && ThreadStatsOn() ? MyThreadStats() : nullptr;

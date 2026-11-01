@@ -62,17 +62,29 @@ bool TracePresent() {
     return trace;
 }
 
-// RT_FPS=30|60|uncapped: the frame-rate cap, whatever the game asks (present interval 2, 1 or 0); F8 in
-// the window cycles through the three. It only caps: the game's own limiter still holds Brothership at
-// 30 fps without the 60 fps mod (which asks for interval 0). -1: not set, the game's interval.
-std::atomic<s32> g_fps_interval{[] {
+// RT_FPS=30|60|uncapped (default 30, the game's own rate): the frame-rate cap, whatever the game asks (present
+// interval 2, 1 or 0); F8 in the window cycles through the three. It only caps: the game's own limiter still
+// holds Brothership at 30 fps without the 60 fps mod (which asks for interval 0, uncapped, so 60 needs both).
+// Read at the first frame, not at start: the start screen may change it before Play (2026-10-31: read at static
+// initialisation, the start screen's 60 came too late and the cap stayed 30).
+constexpr s32 kFpsNotRead = -3;
+std::atomic<s32> g_fps_interval{kFpsNotRead};
+
+s32 FpsInterval() {
+    s32 f = g_fps_interval.load();
+    if (f != kFpsNotRead) return f;
     const char* v = options::Get("RT_FPS");
-    if (!v) return -1;
-    const std::string s = v;
-    const s32 n = s == "30" ? 2 : s == "60" ? 1 : s == "uncapped" ? 0 : -2;
-    if (n == -2) Fatal("RT_FPS=%s: expected 30, 60 or uncapped", v);
-    return n;
-}()};
+    if (!v && std::getenv("RT_PRESENT_INTERVAL")) {
+        f = -1; // (its cap on the game's interval, below)
+    } else {
+        const std::string s = v ? v : "30";
+        f = s == "30" ? 2 : s == "60" ? 1 : s == "uncapped" ? 0 : -2;
+        if (f == -2) Fatal("RT_FPS=%s: expected 30, 60 or uncapped", v);
+    }
+    s32 expected = kFpsNotRead;
+    g_fps_interval.compare_exchange_strong(expected, f); // (F8 may have set it meanwhile: that wins)
+    return g_fps_interval.load();
+}
 
 const char* FpsName(s32 interval) { return interval == 2 ? "30" : interval == 1 ? "60" : "uncapped"; }
 
@@ -81,7 +93,7 @@ const char* FpsName(s32 interval) { return interval == 2 ? "30" : interval == 1 
 // RT_FPS wins over it.
 s32 PacedInterval(s32 interval) {
     static const s32 cap = [] {
-        if (const s32 f = g_fps_interval; f >= 0) Log("nvn window: frame rate %s (RT_FPS)", FpsName(f));
+        if (const s32 f = FpsInterval(); f >= 0) Log("nvn window: frame rate %s (RT_FPS)", FpsName(f));
         const char* v = std::getenv("RT_PRESENT_INTERVAL");
         if (!v) return -1;
         const s32 n = std::atoi(v);
@@ -89,7 +101,7 @@ s32 PacedInterval(s32 interval) {
         Log("nvn window: present interval at most %d (RT_PRESENT_INTERVAL)", n);
         return n;
     }();
-    if (const s32 f = g_fps_interval; f >= 0) return f;
+    if (const s32 f = FpsInterval(); f >= 0) return f;
     return cap >= 0 && interval > cap ? cap : interval;
 }
 

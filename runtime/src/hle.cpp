@@ -77,7 +77,7 @@ void Run(GuestContext* c, u64 target, bool skip_override) {
     // As the top-level dispatch: a lifted function returns early when the guest
     // continues at an address none of its callers waits for.
     while (c->pc != kHostReturn) {
-        rt_jump(c, c->pc);
+        rt_host_jump(c, c->pc);
     }
 }
 
@@ -163,7 +163,7 @@ void SelfTest() {
     c->vreg[0][0] = std::bit_cast<u32>(3.0f);
     c->vreg[0][1] = ~0ULL;
     c->x[30] = kHostReturn;
-    rt_jump(c, half); // as lifted code reaches it: an indirect call
+    rt_host_jump(c, half); // as lifted code reaches it: an indirect call
     if (c->pc != kHostReturn || std::bit_cast<float>(static_cast<u32>(c->vreg[0][0])) != 1.5f || c->vreg[0][1] != 0) {
         Fatal("hle self-test: float result or return address wrong");
     }

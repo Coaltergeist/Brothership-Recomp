@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "options.h"
 #include "perf.h"
 #include "services.h"
 #include "window.h"
@@ -120,8 +121,8 @@ Canvas BoxCanvas(const perf::Second& sec) {
 
 bool Enabled() {
     static const bool on = [] {
-        const char* o = std::getenv("RT_OVERLAY");
-        return o ? std::strcmp(o, "0") != 0 : window::IsOpen();
+        const char* o = std::getenv("RT_OVERLAY"); // (wins over Debug mode)
+        return o ? std::strcmp(o, "0") != 0 : window::IsOpen() && options::Debug();
     }();
     return on;
 }

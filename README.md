@@ -8,16 +8,27 @@ Vulkan). Windows first, the Steam Deck next.
 
 ## Status
 
-**Early - not a beta yet.** The game runs on Windows (title, plaza, menus, battles; 60 fps, internal resolution up
-to 4K, SMAA), but there is no installer or launcher yet: today this repository is the source code, for those who
-want to follow along. The beta - an installer that builds the game from your own files and a launcher for the
-settings - comes later.
+**Beta preview (Windows).** The game runs on Windows (title, plaza, menus, battles; 60 fps, internal resolution up
+to 4K, SMAA). The download is a launcher that installs the game from your own files: it unpacks your dump, translates
+and compiles the game's code and prepares its shaders on your PC (about 10-15 minutes, ~25 GB free disk space while
+it runs). The Steam Deck comes next.
+
+## Installing
+
+1. Download `BrothershipRecomp-Windows.zip` from the [releases](../../releases) and unzip it (not into Program Files).
+2. Start `BrothershipRecomp.exe`.
+3. **Settings > Game files:** the folder with your `.nsp` files (base game + 1.0.1 update).
+   **Settings > Keys:** the folder with your `prod.keys`.
+4. **Build**, then **Play**.
+
+Settings, saves, the build and the caches live in `%LOCALAPPDATA%\brothership-recomp`. To report a problem,
+attach `nxrt.log` and `build\build.log` from there (they never contain your keys).
 
 ## No game content
 
 This repository contains **no Nintendo code, assets or keys**, and never will. To play you need your own copy of
-the game (base game and the 1.0.1 update) dumped from your own Switch, and your own keys (`prod.keys`,
-`title.keys`) from that console. The game is translated and compiled on your machine; nothing of it is
+the game (base game and the 1.0.1 update) dumped from your own Switch, and your own keys (`prod.keys`) from that
+console. The game is translated and compiled on your machine; nothing of it is
 distributed. Please do not ask for game files or keys.
 
 ## What is here
@@ -29,8 +40,8 @@ distributed. Please do not ask for game files or keys.
 - `tests/` - regression tests (a homebrew program run through the whole pipeline, platform tests).
 - `third_party/` - libraries as git submodules (see [NOTICE.md](NOTICE.md)).
 
-Building currently needs a developer setup (cross-compiled from WSL with clang); step-by-step instructions come
-with the installer.
+Building the launcher itself needs a developer setup (cross-compiled from WSL with clang; `tools/package_windows.sh`
+makes the download).
 
 ## License
 

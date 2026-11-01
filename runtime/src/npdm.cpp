@@ -52,6 +52,12 @@ Npdm Load() {
 } // namespace
 
 const Npdm& TitleNpdm() {
+    // Kept once RT_NPDM names a file. Before that (a player start: the game folder is known only once the start
+    // screen has run, rt.cpp) an empty one, not kept: the NVN layer names its caches by the program id while the
+    // start screen shows, and a kept empty NPDM allowed every service - the game then asked for vi:m, which has no
+    // implementation, and aborted in nn::vi::Initialize (2026-11-01).
+    static const Npdm empty;
+    if (!std::getenv("RT_NPDM")) return empty;
     static const Npdm n = Load();
     return n;
 }

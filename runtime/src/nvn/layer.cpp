@@ -115,10 +115,17 @@ void ShadowQueueInit(const std::string&, const GuestContext& before, const Guest
 
 bool Enabled() {
     static const bool on = [] {
+        // auto (the default): the layer for a program that loads NVN (nvnBootstrapLoader in symbols.txt), the
+        // driver seam for one that draws through nvdrv itself (M1's homebrew) and under the tap (RT_NVN_TAP: it
+        // watches the real driver). After LoadSymbols; with no symbols at all (a player start, the game loaded at
+        // Play, build.h) the layer: the start screen draws with it.
         const char* g = std::getenv("RT_GPU");
-        const std::string v = g ? g : "driver";
-        if (v != "driver" && v != "nvn") Fatal("RT_GPU=%s: expected driver or nvn", v.c_str());
-        return v == "nvn";
+        const std::string v = g ? g : "auto";
+        if (v != "auto" && v != "driver" && v != "nvn") Fatal("RT_GPU=%s: expected auto, driver or nvn", v.c_str());
+        const bool nvn = v == "nvn" || (v == "auto" && !std::getenv("RT_NVN_TAP") &&
+                                        (!HaveSymbols() || FindSymbol("nvnBootstrapLoader").size() == 1));
+        Log("gpu: %s (RT_GPU=%s)", nvn ? "the NVN layer" : "the driver seam (video_core)", v.c_str());
+        return nvn;
     }();
     return on;
 }

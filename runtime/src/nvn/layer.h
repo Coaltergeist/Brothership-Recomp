@@ -17,7 +17,7 @@
 
 namespace rt::nvn {
 
-/// RT_GPU=nvn.
+/// RT_GPU=nvn, or RT_GPU=auto (the default) and the program loads NVN. After the symbols are loaded.
 bool Enabled();
 
 /// Installs the layer if enabled. After hle::Init, before guest code runs.

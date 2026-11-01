@@ -9,4 +9,8 @@ set(DRIPPU_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/drippu/src" CACHE PAT
 
 add_executable(nxrecomp src/main.cpp src/image.cpp src/analysis.cpp src/emit.cpp src/link.cpp src/simd.cpp src/fastmem.cpp src/patch.cpp)
 target_include_directories(nxrecomp PRIVATE "${DRIPPU_SRC}")
-target_compile_options(nxrecomp PRIVATE -Wall -Wextra)
+if (MSVC) # clang-cl (tools/cross, the players' Windows builder: tools/make_toolchain.sh): its -Wall means -Weverything
+    target_compile_options(nxrecomp PRIVATE /clang:-Wall /clang:-Wextra)
+else()
+    target_compile_options(nxrecomp PRIVATE -Wall -Wextra)
+endif()

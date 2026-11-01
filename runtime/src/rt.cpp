@@ -1,7 +1,11 @@
 #include "rt.h"
+#include "build/build.h"
+#include "seed/extract.h"
 #include "diag.h"
 #include "gpu.h"
 #include "hle.h"
+#include "mods.h"
+#include "ui/start.h"
 #include "options.h"
 #include "nvn/layer.h"
 #include "nvn/tap.h"
@@ -13,7 +17,10 @@
 
 #include <thread>
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -24,20 +31,20 @@
 #include <map>
 
 extern "C" {
-thread_local uint64_t rt_trace_pc = 0;
 }
 
-// The lift's memory mode: `nxrecomp --direct-mem` defines nx_mem_direct_base in nx_table.c (its lifted code
-// reaches guest memory at that host address, old_plans/FASTMEM_PLAN.md Phase 2); other lifts do not define it.
-#ifdef _WIN32
-extern "C" const unsigned long long nx_mem_direct_base_none = 0;
-#pragma comment(linker, "/alternatename:nx_mem_direct_base=nx_mem_direct_base_none")
-extern "C" const unsigned long long nx_mem_direct_base;
-static unsigned long long LiftDirectBase() { return nx_mem_direct_base; }
-#else
-extern "C" __attribute__((weak)) const unsigned long long nx_mem_direct_base;
-static unsigned long long LiftDirectBase() { return &nx_mem_direct_base ? nx_mem_direct_base : 0; }
-#endif
+// The lift's memory mode: nxrecomp's direct memory (the default) puts guest memory at a fixed host address
+// (old_plans/FASTMEM_PLAN.md Phase 2), NxGame::direct_base; 0: a checked lift.
+static unsigned long long LiftDirectBase() { return rt::Game().direct_base; }
+
+// Mods switched at run time: `nxrecomp --mod`'s table (the same layout in nx_table.c); a lift without mods has none.
+struct NxModWrite { unsigned long long offset, size; const unsigned char* bytes; };
+struct NxMod { const char* name; unsigned long long first_write, write_count; };
+struct NxModTable { unsigned long long count; const NxMod* mods; const NxModWrite* writes; unsigned char* on; };
+static const NxModTable& LiftMods() {
+    static const NxModTable none = {0, nullptr, nullptr, nullptr};
+    return rt::Game().mods ? *rt::Game().mods : none;
+}
 
 namespace rt {
 
@@ -191,6 +198,10 @@ void LoadSymbols(const std::string& path) {
 
 } // namespace
 
+bool HaveSymbols() {
+    return !g_symbols.empty();
+}
+
 namespace {
 struct FuncIndex {
     u64 pages = 0;
@@ -200,15 +211,16 @@ struct FuncIndex {
 const FuncIndex& Index() {
     static const FuncIndex index = [] {
         FuncIndex x;
-        const u64 last = rt_func_count ? rt_funcs[rt_func_count - 1].offset : 0;
-        x.pages = (std::max<u64>(rt_image_size, last + 1) >> 12) + 1;
+        const NxGame& g = Game();
+        const u64 last = g.func_count ? g.funcs[g.func_count - 1].offset : 0;
+        x.pages = (std::max<u64>(g.image_size, last + 1) >> 12) + 1;
         x.first = std::make_unique<u32[]>(x.pages + 1);
         u64 f = 0;
         for (u64 p = 0; p <= x.pages; ++p) {
-            while (f < rt_func_count && rt_funcs[f].offset < (p << 12)) ++f;
+            while (f < g.func_count && g.funcs[f].offset < (p << 12)) ++f;
             x.first[p] = static_cast<u32>(f);
         }
-        x.overridden = std::make_unique<std::atomic<u8>[]>(rt_func_count);
+        x.overridden = std::make_unique<std::atomic<u8>[]>(g.func_count);
         return x;
     }();
     return index;
@@ -223,8 +235,8 @@ const RtFunc* FindFunc(u64 va) {
     const FuncIndex& x = Index();
     const u64 p = off >> 12;
     if (p >= x.pages) return nullptr;
-    const RtFunc* end = rt_funcs + x.first[p + 1];
-    const RtFunc* it = std::lower_bound(rt_funcs + x.first[p], end, off,
+    const RtFunc* end = rt::Game().funcs + x.first[p + 1];
+    const RtFunc* it = std::lower_bound(rt::Game().funcs + x.first[p], end, off,
                                         [](const RtFunc& f, u64 v) { return f.offset < v; });
     return it != end && it->offset == off ? it : nullptr;
 }
@@ -243,12 +255,12 @@ struct JumpCache {
 thread_local JumpCache* t_jump_cache = nullptr;
 
 void MarkOverridden(const RtFunc* f) {
-    Index().overridden[f - rt_funcs].store(1, std::memory_order_release);
+    Index().overridden[f - rt::Game().funcs].store(1, std::memory_order_release);
     g_jump_gen.fetch_add(1, std::memory_order_release);
 }
 
 bool Overridden(const RtFunc* f) {
-    return Index().overridden[f - rt_funcs].load(std::memory_order_acquire) != 0;
+    return Index().overridden[f - rt::Game().funcs].load(std::memory_order_acquire) != 0;
 }
 
 std::vector<u64> FindSymbol(const std::string& name) {
@@ -484,19 +496,28 @@ void Memory::MakeDeviceVisible(u64 va, u64 size) {
             continue;
         }
         if (it != device_extents_.end()) gap_end = std::min(end, it->first);
-        const u64 len = gap_end - at;
-        if (device_used_ + len > kDeviceBackingSize) Fatal("device memory backing exhausted");
-        const u64 phys = device_used_;
-        device_used_ += len;
-        // Copy what the guest already has there, then put the backing in its place (never write-tracked from
-        // now on: the backing's own view writes these pages without faulting).
-        writetrack::Exclude(at, len, true);
-        std::memcpy(device_base_ + phys, Raw(at), len);
-        if (!platform::MapDeviceView(Raw(at), len, phys)) {
-            Fatal("cannot alias 0x%llx+0x%llx onto the device backing", (unsigned long long)at,
-                  (unsigned long long)len);
+        // Only what the guest has mapped: nvmap pins a handle's aligned size, which can reach past the guest's
+        // memory (1.0.1: 4 KB allocated with 128 KB alignment). Pages left out have no DevicePointer, and the
+        // SMMU's Map skips them (drippu, yuzu).
+        const auto [first, last] = OverlapLocked(at, gap_end);
+        for (size_t i = first; i < last; ++i) {
+            const Region& r = regions_[i];
+            const u64 b = std::max(at, r.base), e = std::min(gap_end, r.base + r.size);
+            if (b >= e) continue;
+            const u64 len = e - b;
+            if (device_used_ + len > kDeviceBackingSize) Fatal("device memory backing exhausted");
+            const u64 phys = device_used_;
+            device_used_ += len;
+            // Copy what the guest already has there, then put the backing in its place (never write-tracked from
+            // now on: the backing's own view writes these pages without faulting).
+            writetrack::Exclude(b, len, true);
+            std::memcpy(device_base_ + phys, Raw(b), len);
+            if (!platform::MapDeviceView(Raw(b), len, phys)) {
+                Fatal("cannot alias 0x%llx+0x%llx onto the device backing", (unsigned long long)b,
+                      (unsigned long long)len);
+            }
+            device_extents_[b] = {len, phys};
         }
-        device_extents_[at] = {len, phys};
         at = gap_end;
     }
 }
@@ -737,7 +758,7 @@ std::string Describe(u64 va) {
         std::snprintf(b, sizeof b, "0x%llx (host:%s)", (unsigned long long)va, hle::HostFunctionName(va).c_str());
         return b;
     }
-    if (va >= kImageBase && va < kImageBase + rt_image_size) {
+    if (va >= kImageBase && va < kImageBase + rt::Game().image_size) {
         const u64 off = va - kImageBase;
         auto it = g_symbols.upper_bound(off);
         if (it != g_symbols.begin()) {
@@ -772,7 +793,7 @@ void LogGuestState() {
     const GuestContext* c = CurrentContext();
     const KThread* t = CurrentThread();
     std::fprintf(stderr, "[rt]   thread %s, guest pc %s, lr %s, sp 0x%llx\n", t ? t->name.c_str() : "(not a guest thread)",
-                 Describe(kImageBase + rt_trace_pc).c_str(), c ? Describe(c->x[30]).c_str() : "?",
+                 GameLoaded() ? Describe(kImageBase + *Game().trace_pc()).c_str() : "?", c ? Describe(c->x[30]).c_str() : "?",
                  c ? (unsigned long long)c->x[31] : 0ULL);
 }
 
@@ -791,17 +812,17 @@ using namespace rt;
 
 // --- Called from generated code ----------------------------------------------
 
-extern "C" BlockFn recomp_lookup(uint64_t pc) {
+extern "C" BlockFn rt_host_lookup(uint64_t pc) {
     if (hle::IsHostAddress(pc) || hle::IsOverridden(pc)) {
-        return [](GuestContext* c) { rt_jump(c, c->pc); }; // host functions and overrides: rt_jump's path
+        return [](GuestContext* c) { rt_host_jump(c, c->pc); }; // host functions and overrides: rt_jump's path
     }
     const RtFunc* f = FindFunc(pc);
     return f ? f->fn : nullptr;
 }
 
 static bool InImageText(u64 va) {
-    for (unsigned long i = 0; i < rt_segment_count; ++i) {
-        const RtSegment& s = rt_segments[i];
+    for (unsigned long i = 0; i < rt::Game().segment_count; ++i) {
+        const RtSegment& s = rt::Game().segments[i];
         if ((s.perm & 4) && va >= kImageBase + s.offset && va < kImageBase + s.offset + s.size) {
             return true;
         }
@@ -809,7 +830,7 @@ static bool InImageText(u64 va) {
     return false;
 }
 
-extern "C" void rt_jump(GuestContext* c, uint64_t target) {
+extern "C" void rt_host_jump(GuestContext* c, uint64_t target) {
     if (target == kLoaderReturn) {
         Exit(static_cast<int>(c->x[0]));
     }
@@ -855,7 +876,7 @@ extern "C" void rt_jump(GuestContext* c, uint64_t target) {
     f->fn(c);
 }
 
-extern "C" void rt_break(GuestContext*, uint32_t imm, uint64_t pc) {
+extern "C" void rt_host_break(GuestContext*, uint32_t imm, uint64_t pc) {
     Fatal("brk #0x%x at %s", imm, Describe(pc).c_str());
 }
 
@@ -875,25 +896,133 @@ extern "C" void rt_break(GuestContext*, uint32_t imm, uint64_t pc) {
     c->x[30] = kLoaderReturn;
     c->x[31] = stack_base + kMainStackSize;
     c->tpidrro_el0 = kTlsBase;
-    c->pc = kImageBase + rt_entry;
+    c->pc = kImageBase + rt::Game().entry;
     Log("image 0x%llx bytes at 0x%llx, %lu functions, entry %s",
-        (unsigned long long)rt_image_size, (unsigned long long)kImageBase, rt_func_count,
+        (unsigned long long)rt::Game().image_size, (unsigned long long)kImageBase, rt::Game().func_count,
         Describe(c->pc).c_str());
 
     if (g_parallel) gil.unlock();
     // Top-level dispatch: generated functions return when the guest returns to an
     // address none of their callers is waiting for (see the lifter's ResumeCheck).
     for (;;) {
-        rt_jump(c, c->pc);
+        rt_host_jump(c, c->pc);
     }
 }
 
 // --- Startup -------------------------------------------------------------------
 
+// The exefs mods RT_MODS enables (mods.h; nxrecomp --mod, PORT_PLAN B2) switched on and their writes put into the
+// loaded image, before any guest code runs (as Atmosphère's loader patches an NSO before rtld relocates it). In
+// table order, so a later mod's bytes win where two overlap, as its lifted word does (the lifter's
+// ModdedInstruction).
+static std::vector<std::string> BuiltMods() {
+    const NxModTable& t = LiftMods();
+    std::vector<std::string> built;
+    for (unsigned long long k = 0; k < t.count; ++k) built.push_back(t.mods[k].name);
+    return built;
+}
+
+static void ApplyMods() {
+    const NxModTable& t = LiftMods();
+    const std::vector<std::string> built = BuiltMods();
+    const std::vector<std::string>& enabled = mods::Enabled(built);
+    std::string on;
+    for (unsigned long long k = 0; k < t.count; ++k) {
+        const NxMod& m = t.mods[k];
+        t.on[k] = std::find(enabled.begin(), enabled.end(), m.name) != enabled.end();
+        if (!t.on[k]) continue;
+        for (unsigned long long i = m.first_write; i < m.first_write + m.write_count; ++i) {
+            std::memcpy(g_mem.Raw(kImageBase + t.writes[i].offset), t.writes[i].bytes, t.writes[i].size);
+        }
+        on += std::string(on.empty() ? "" : ", ") + m.name + " (" + std::to_string(m.write_count) + " writes)";
+    }
+    std::string all;
+    for (const auto& n : enabled) all += (all.empty() ? "" : ", ") + n;
+    if (t.count || !enabled.empty()) {
+        Log("mods: enabled: %s; exefs patches on: %s; built in: %zu", all.empty() ? "none" : all.c_str(),
+            on.empty() ? "none" : on.c_str(), built.size());
+    }
+}
+
+/// A player start's RT_ROMFS and RT_NPDM from the game folder (build.h), unless the environment set them (`own`: the
+/// ones we set). Before the window opens - the NVN layer names its caches by the NPDM's program id - and again after
+/// the start screen, whose settings may have changed the game folder. The NVN layer's caches (RT_PIPELINE_CACHE)
+/// default to the per-user folder's cache\ (where the bench scripts put them) and the saves (RT_SAVE_DIR) to its
+/// save\, not beside the working folder.
+static void GameEnv(bool own_romfs, bool own_npdm) {
+    const build::Paths paths = build::Where();
+    const auto set = [](const char* name, const std::string& value) {
+        if (value.empty()) return;
+#ifdef _WIN32
+        _putenv_s(name, value.c_str());
+#else
+        setenv(name, value.c_str(), 1);
+#endif
+    };
+    if (own_romfs) set("RT_ROMFS", paths.romfs);
+    if (own_npdm) set("RT_NPDM", paths.npdm);
+    if (const char* c = std::getenv("RT_PIPELINE_CACHE"); !c || !*c) {
+        set("RT_PIPELINE_CACHE", (std::filesystem::path(options::UserDir()) / "cache").string());
+    }
+    if (const char* c = std::getenv("RT_SAVE_DIR"); !c || !*c) { // (services/fs.cpp: else save/ beside the work folder)
+        set("RT_SAVE_DIR", (std::filesystem::path(options::UserDir()) / "save").string());
+    }
+}
+
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <image.bin> [symbols.txt]\n", argv[0]);
+    // A build without a console window (RELEASE_PLAN) started by a double-click: the log to the per-user folder
+    platform::AttachOutput((std::filesystem::path(options::UserDir()) / "nxrt.log").string());
+    // the positional ones; --play: no start screen (ui/start.h); --build: build the game module and end (build.h)
+    std::vector<const char*> args;
+    bool build_only = false;
+    // --extract-shaders <romfs> <out>: the game's shader stages for the seed (seed/extract.h), then end
+    if (argc == 4 && std::strcmp(argv[1], "--extract-shaders") == 0) {
+        std::atomic<bool> cancel{false};
+        seed::ExtractStats st;
+        std::string why;
+        const auto t0 = std::chrono::steady_clock::now();
+        int last = -1;
+        const char* nt = std::getenv("RT_SEED_THREADS"); // (default: half the cores)
+        const bool ok = seed::ExtractStages(argv[2], argv[3], nt ? std::atoi(nt) : std::max(1, static_cast<int>(std::thread::hardware_concurrency()) / 2),
+                                            [&](double f) {
+                                                const int pct = static_cast<int>(f * 100);
+                                                if (pct / 10 != last / 10) std::printf("%d%%\n", pct), std::fflush(stdout);
+                                                last = pct;
+                                            },
+                                            cancel, &st, &why);
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        if (!ok) std::fprintf(stderr, "--extract-shaders: %s\n", why.c_str());
+        else std::printf("%zu containers, %zu chunks (%zu differ from their TOC hash): %zu entries, %zu stages written (%zu not split) in %.0f s\n",
+                         st.containers, st.chunks, st.bad_chunks, st.entries, st.stages, st.unsplit, secs);
+        return ok ? 0 : 1;
+    }
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--build") == 0) build_only = true;
+        else if (std::strcmp(argv[i], "--play") != 0) args.push_back(argv[i]);
+    }
+#ifdef NXRT_GAME_MODULE
+    // A player start: no image named, so the game files and the build folder come from the settings (build.h), the
+    // module is loaded once Play is chosen (a rebuild on the start screen can still replace it)
+    const bool player = args.empty();
+    if (build_only) return build::Command();
+#else
+    const bool player = false;
+    if (build_only) {
+        std::fprintf(stderr, "--build: this runtime has the game built in (NXRT_GAME=static)\n");
         return 2;
+    }
+#endif
+    if (args.empty() && !player) {
+        std::fprintf(stderr, "usage: %s <image.bin> [symbols.txt] [--play]\n", argv[0]);
+        return 2;
+    }
+    if (player) {
+        // the per-user folder as the working folder: what a run writes beside it (fps.csv, a crash dump, captures)
+        // lands there wherever the program is (an unzipped download: perhaps not writable; 2026-11-01 a start from
+        // C:\ stopped at "cannot write fps.csv")
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(options::UserDir()), ec);
+        std::filesystem::current_path(std::filesystem::path(options::UserDir()), ec);
     }
     platform::InitProcess();
     // The guest window first, at its fixed host address, before anything else in the process allocates
@@ -918,28 +1047,81 @@ int main(int argc, char** argv) {
         std::fflush(stderr);
         std::exit(ok ? 0 : 1);
     }
-    if (argc > 2) {
-        LoadSymbols(argv[2]);
+    if (!player) {
+        if (args.size() > 1) {
+            LoadSymbols(args[1]);
+        }
+        LoadGame(); // the lifted code: linked in, or the game module (game/game.h)
     }
-
+    const auto unset = [](const char* name) {
+        const char* v = std::getenv(name);
+        return !v || !*v;
+    };
+    const bool own_romfs = player && unset("RT_ROMFS"), own_npdm = player && unset("RT_NPDM");
+    if (player) GameEnv(own_romfs, own_npdm);
+    // Whether the game's NPDM is there now: the NVN layer, made with the window, names its caches by its program id
+    const auto have_npdm = [] {
+        const char* n = std::getenv("RT_NPDM");
+        std::error_code ec;
+        return n && *n && std::filesystem::exists(std::filesystem::path(n), ec);
+    };
+    const bool caches_named = have_npdm();
     diag::Start();
     options::LogAll();
     window::Open(); // early: a missing display fails before the image loads
-    std::ifstream f(argv[1], std::ios::binary);
-    std::vector<char> image((std::istreambuf_iterator<char>(f)), {});
-    if (image.size() != rt_image_size) {
-        Fatal("%s is 0x%zx bytes, but the lifted code expects 0x%llx", argv[1], image.size(),
-              (unsigned long long)rt_image_size);
+    if (ui::Wanted(argc, argv)) { // the start screen (LAUNCHER_PLAN): returns on Play, with the settings it saved
+        ui::Run(player ? build::BuiltMods() : BuiltMods(), player);
+        window::Reapply();
+        options::LogAll();
+        // A first install: the start screen ran before the game files existed, so the NVN layer opened caches with no
+        // program id - the seed's went unused for the whole session (2026-11-01, the user's first play). Start again
+        // straight into the game (--play), which opens the seeded ones.
+        if (player && !caches_named) {
+            GameEnv(own_romfs, own_npdm);
+            if (have_npdm()) {
+                const std::string self = platform::ExecutablePath();
+                const char* restart[] = {self.c_str(), "--play", nullptr};
+                const SDL_PropertiesID props = SDL_CreateProperties();
+                SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, restart);
+                SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true); // (outlives us)
+                SDL_Process* p = SDL_CreateProcessWithProperties(props);
+                SDL_DestroyProperties(props);
+                if (p) {
+                    Log("start screen: the game's caches were opened before its files existed: starting again (%s --play)",
+                        self.c_str());
+                    Exit(0);
+                }
+                Log("start screen: could not start again (%s): playing without the seeded caches", SDL_GetError());
+            }
+        }
     }
-    if (rt_load_base != 0 && rt_load_base != kImageBase) {
+    std::string image_path = player ? "" : args[0];
+    if (player) {
+        const build::Paths paths = build::Where();
+        std::string why;
+        if (!build::Ready(&why)) Fatal("%s Build it with nxrt --build or on the start screen.", why.c_str());
+        const std::string id = build::WantedId(&why);
+        GameEnv(own_romfs, own_npdm);
+        Log("game: files %s, build folder %s", paths.game.c_str(), paths.dir.c_str());
+        LoadSymbols(paths.symbols);
+        LoadGame(paths.module.c_str(), id.c_str());
+        image_path = paths.image;
+    }
+    std::ifstream f{std::filesystem::path(image_path), std::ios::binary};
+    std::vector<char> image((std::istreambuf_iterator<char>(f)), {});
+    if (image.size() != rt::Game().image_size) {
+        Fatal("%s is 0x%zx bytes, but the lifted code expects 0x%llx", image_path.c_str(), image.size(),
+              (unsigned long long)rt::Game().image_size);
+    }
+    if (rt::Game().load_base != 0 && rt::Game().load_base != kImageBase) {
         Fatal("the image was linked at 0x%llx, but the runtime loads it at 0x%llx",
-              (unsigned long long)rt_load_base, (unsigned long long)kImageBase);
+              (unsigned long long)rt::Game().load_base, (unsigned long long)kImageBase);
     }
     // Segments as the lifter describes them. A self-relocating image (libnx) has
     // writable rodata so it can apply its own relocations.
     u64 mapped_end = 0; // segments sharing a page: the first one's permissions win
-    for (unsigned long i = 0; i < rt_segment_count; ++i) {
-        const RtSegment& s = rt_segments[i];
+    for (unsigned long i = 0; i < rt::Game().segment_count; ++i) {
+        const RtSegment& s = rt::Game().segments[i];
         const u64 begin = std::max<u64>(s.offset & ~0xFFFULL, mapped_end);
         const u64 end = (s.offset + s.size + 0xFFF) & ~0xFFFULL;
         if (end <= begin) {
@@ -952,6 +1134,7 @@ int main(int argc, char** argv) {
                   s.perm & 4 ? "image .text" : s.perm & 2 ? "image data" : "image rodata");
     }
     std::memcpy(g_mem.Raw(kImageBase), image.data(), image.size());
+    ApplyMods();
 
     const u64 stack_base = kStackRegion;
     g_mem.Map(stack_base, kMainStackSize, kRead | kWrite, kMemStack, "main stack");
@@ -959,7 +1142,7 @@ int main(int argc, char** argv) {
     // Host functions and overrides; slots.txt lies next to the image (nxrecomp's output).
     {
         // (std::filesystem: Windows paths separate with '\\', \\wsl.localhost\... ones too)
-        const std::filesystem::path dir = std::filesystem::path(argv[1]).parent_path();
+        const std::filesystem::path dir = std::filesystem::path(image_path).parent_path();
         hle::Init(((dir.empty() ? std::filesystem::path(".") : dir) / "slots.txt").string());
     }
     nvn::Init();
@@ -994,7 +1177,7 @@ int main(int argc, char** argv) {
     Log("memory: %s", g_direct_mem ? "direct (lifted code reaches the window itself; exclusives through the helpers)"
                       : fastmem    ? "fastmem (plain pages inline, GPU-cached pages through the callbacks)"
                                    : "every access through the callbacks");
-    g_module_base = kImageBase;
+    *rt::Game().module_base = kImageBase;
 
     // The guest's main thread gets a host thread of its own; this one runs the
     // window's event loop (window.h).

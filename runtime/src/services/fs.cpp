@@ -15,9 +15,11 @@
 #include <filesystem>
 #include <vector>
 #include <string>
+#include <map>
 #include <mutex>
 
 #include "../ipc.h"
+#include "../mods.h"
 #include "../platform/platform.h"
 #include "../npdm.h"
 #include "../services.h"
@@ -89,34 +91,66 @@ u32 HashTableCount(u32 entries) {
 
 class RomFs {
 public:
-    explicit RomFs(const std::string& root) : root_len_(root.size()) {
+    /// roots[0]: the game's extracted RomFS; the others: mods' romfs/ folders layered over it in order (B3): their
+    /// directories merge, a file replaces the one at the same path (a later layer wins) or is added.
+    explicit RomFs(const std::vector<std::string>& roots) {
         struct Dir {
             std::string name;
             u32 parent = 0, offset = 0;
             std::vector<u32> dirs, files;
-            fs::path path;
+            std::vector<std::pair<size_t, fs::path>> paths; // (layer, host directory) of every layer that has it
         };
         struct File {
             std::string name;
             u32 parent = 0, offset = 0;
             u64 data = 0, size = 0;
             fs::path path;
+            size_t layer = 0;
         };
         std::vector<Dir> dirs(1);
         std::vector<File> files;
-        dirs[0].path = root;
+        dirs[0].paths.push_back({0, roots[0]});
+        for (size_t l = 1; l < roots.size(); ++l) dirs[0].paths.push_back({l, roots[l]});
+        std::vector<size_t> replaced(roots.size()), added(roots.size());
         // Breadth-first, names sorted, so the image is deterministic.
         for (size_t d = 0; d < dirs.size(); ++d) {
-            std::vector<fs::directory_entry> entries(fs::directory_iterator(dirs[d].path), {});
-            std::sort(entries.begin(), entries.end(),
-                      [](const auto& a, const auto& b) { return a.path().filename() < b.path().filename(); });
-            for (const auto& e : entries) {
-                if (e.is_directory()) {
+            struct Entry {
+                bool dir = false;
+                std::vector<std::pair<size_t, fs::path>> paths; // a directory's, per layer
+                fs::path file;
+                u64 size = 0;
+                size_t layer = 0;
+            };
+            std::map<fs::path, Entry> entries; // by name, the layers merged
+            for (const auto& [layer, path] : dirs[d].paths) {
+                for (const auto& e : fs::directory_iterator(path)) {
+                    const fs::path name = e.path().filename();
+                    const bool dir = e.is_directory();
+                    if (!dir && !e.is_regular_file()) continue;
+                    auto [it, fresh] = entries.try_emplace(name);
+                    Entry& x = it->second;
+                    if (!fresh && x.dir != dir) {
+                        Fatal("romfs: %s is a %s in one layer and a %s in %s", e.path().string().c_str(),
+                              dir ? "directory" : "file", x.dir ? "directory" : "file", roots[x.dir ? x.paths.back().first : x.layer].c_str());
+                    }
+                    x.dir = dir;
+                    if (dir) {
+                        x.paths.push_back({layer, e.path()});
+                    } else {
+                        if (layer) ++(fresh ? added : replaced)[layer];
+                        x.file = e.path();
+                        x.size = e.file_size();
+                        x.layer = layer;
+                    }
+                }
+            }
+            for (auto& [name, x] : entries) {
+                if (x.dir) {
                     dirs[d].dirs.push_back(static_cast<u32>(dirs.size()));
-                    dirs.push_back({e.path().filename().string(), static_cast<u32>(d), 0, {}, {}, e.path()});
-                } else if (e.is_regular_file()) {
+                    dirs.push_back({name.string(), static_cast<u32>(d), 0, {}, {}, std::move(x.paths)});
+                } else {
                     dirs[d].files.push_back(static_cast<u32>(files.size()));
-                    files.push_back({e.path().filename().string(), static_cast<u32>(d), 0, 0, e.file_size(), e.path()});
+                    files.push_back({name.string(), static_cast<u32>(d), 0, 0, x.size, x.file, x.layer});
                 }
             }
         }
@@ -135,7 +169,8 @@ public:
             data = Align(data, 0x10);
             f.data = data;
             data += f.size;
-            files_.push_back({f.path.string(), kDataOffset + f.data, f.size, {}});
+            const std::string host = f.path.string();
+            files_.push_back({host, host.substr(roots[f.layer].size()), kDataOffset + f.data, f.size, {}});
         }
         const u32 file_meta_size = at;
 
@@ -194,8 +229,11 @@ public:
         const u64 header[10] = {0x50, dir_hash_off, dir_hash.size(), dir_meta_off, dir_meta.size(),
                                 file_hash_off, file_hash.size(), file_meta_off, file_meta.size(), kDataOffset};
         std::memcpy(head_.data(), header, sizeof header);
-        Log("romfs %s: %zu directories, %zu files, image 0x%llx bytes", root.c_str(), dirs.size(), files.size(),
+        Log("romfs %s: %zu directories, %zu files, image 0x%llx bytes", roots[0].c_str(), dirs.size(), files.size(),
             (unsigned long long)size_);
+        for (size_t l = 1; l < roots.size(); ++l) {
+            Log("romfs: mod layer %s: %zu files replaced, %zu added", roots[l].c_str(), replaced[l], added[l]);
+        }
     }
 
     u64 Size() const { return size_; }
@@ -226,11 +264,11 @@ public:
                     HostFile& f = *std::prev(it);
                     n = std::min(size, f.offset + f.size - offset);
                     if (g_trace_romfs) {
-                        Log("romfs read %s +0x%llx size 0x%llx", f.path.c_str() + root_len_,
+                        Log("romfs read %s +0x%llx size 0x%llx", f.rel.c_str(),
                             (unsigned long long)(offset - f.offset), (unsigned long long)n);
                     }
                     if (!f.file.IsOpen()) {
-                        opened.push_back(f.path.substr(root_len_)); // first read of this file
+                        opened.push_back(f.rel); // first read of this file
                         if (!f.file.Open(f.path, platform::File::Mode::kRead)) {
                             Fatal("romfs: cannot open %s", f.path.c_str());
                         }
@@ -251,7 +289,7 @@ public:
 
 private:
     struct HostFile {
-        std::string path;
+        std::string path, rel; // the host file, and its path in the RomFS (as the host spells it)
         u64 offset, size; // in the image
         platform::File file; // opened on first read
     };
@@ -259,7 +297,6 @@ private:
     std::vector<u8> head_, meta_;
     std::vector<HostFile> files_; // sorted by offset
     u64 meta_offset_ = 0, size_ = 0;
-    size_t root_len_ = 0;
 };
 
 RomFs& TheRomFs() {
@@ -268,7 +305,9 @@ RomFs& TheRomFs() {
         if (!dir || !fs::is_directory(dir)) {
             Fatal("the game opened its RomFS: set RT_ROMFS to the extracted RomFS directory");
         }
-        return new RomFs(dir);
+        std::vector<std::string> roots{dir};
+        for (auto& layer : mods::RomfsLayers()) roots.push_back(std::move(layer)); // RT_MODS (rt.cpp: already checked)
+        return new RomFs(roots);
     }();
     return *romfs;
 }
@@ -551,7 +590,8 @@ private:
     fs::path root_;
 };
 
-/// Save data lives in save/<program id>/<type>_<user id>/ under the working directory.
+/// Save data lives in <RT_SAVE_DIR>/<program id>/<type>_<user id>/; RT_SAVE_DIR defaults to save/ under the working
+/// directory (the bench scripts' run folders), and a player start sets it to the per-user folder's save/ (rt.cpp).
 std::shared_ptr<HostFileSystem> OpenSaveData(IpcContext& ctx) {
     const u8 space_id = ctx.Pop<u8>();
     struct {
@@ -566,11 +606,13 @@ std::shared_ptr<HostFileSystem> OpenSaveData(IpcContext& ctx) {
     attr = ctx.At<decltype(attr)>(8);
     const u64 program = attr.program_id ? attr.program_id : TitleNpdm().program_id;
     char dir[96];
-    std::snprintf(dir, sizeof dir, "save/%016llx/%u_%016llx%016llx", (unsigned long long)program, attr.type,
+    std::snprintf(dir, sizeof dir, "%016llx/%u_%016llx%016llx", (unsigned long long)program, attr.type,
                   (unsigned long long)attr.user_id[1], (unsigned long long)attr.user_id[0]);
-    Log("fs   save data (space %u, index %u) -> %s", space_id, attr.index, dir);
+    const char* root = std::getenv("RT_SAVE_DIR");
+    const std::string path = (fs::path(root && *root ? root : "save") / dir).string();
+    Log("fs   save data (space %u, index %u) -> %s", space_id, attr.index, path.c_str());
     std::shared_ptr<HostFileSystem> mounted;
-    SaveIo("mount", dir, [&] { mounted = std::make_shared<HostFileSystem>(dir, "save"); }); // creates the folders
+    SaveIo("mount", path, [&] { mounted = std::make_shared<HostFileSystem>(path, "save"); }); // creates the folders
     return mounted;
 }
 

@@ -86,13 +86,45 @@ HeadlessWindow* g_headless = nullptr;
 void UpdateTitle(SDL_Window* w) {
     const perf::Second s = perf::LastSecond();
     char title[128];
-    if (perf::Frames() == 0) {
-        std::snprintf(title, sizeof title, "nxrt");
+    if (perf::Frames() == 0 || !options::Debug()) { // (the frame rate: Debug mode only)
+        std::snprintf(title, sizeof title, "Brothership Recomp");
     } else {
-        std::snprintf(title, sizeof title, "nxrt | %u fps | frame time p50 %.1f / p95 %.1f / max %.1f ms", s.frames,
+        std::snprintf(title, sizeof title, "Brothership Recomp | %u fps | frame time p50 %.1f / p95 %.1f / max %.1f ms", s.frames,
                       s.p50_ms, s.p95_ms, s.max_ms);
     }
     SDL_SetWindowTitle(w, title);
+}
+
+/// RT_WINDOW (windowed | borderless: SDL3's desktop full screen, no frame, the display's size) and RT_WINDOW_SIZE
+/// (<w>x<h>, the windowed size): what Open and Reapply set.
+struct Mode {
+    bool borderless = false;
+    int width = kWidth, height = kHeight;
+};
+
+Mode ReadMode() {
+    Mode m;
+    const char* mode = options::Get("RT_WINDOW");
+    m.borderless = mode && std::strcmp(mode, "borderless") == 0;
+    if (mode && !m.borderless && std::strcmp(mode, "windowed") != 0) Fatal("window: RT_WINDOW=%s (windowed|borderless)", mode);
+    if (const char* size = options::Get("RT_WINDOW_SIZE")) {
+        if (std::sscanf(size, "%dx%d", &m.width, &m.height) != 2 || m.width <= 0 || m.height <= 0) {
+            Fatal("window: RT_WINDOW_SIZE=%s (expected <width>x<height>)", size);
+        }
+    }
+    return m;
+}
+
+/// The window's size in pixels after the event queue has caught up; the resolution follows it (RT_RES=auto).
+void ChooseResolution(SDL_Window* w, bool borderless) {
+    SDL_PumpEvents();
+    int w_px = kWidth, h_px = kHeight;
+    SDL_GetWindowSizeInPixels(w, &w_px, &h_px);
+    g_window->UpdateCurrentFramebufferLayout(static_cast<u32>(w_px), static_cast<u32>(h_px));
+    resolution::Choose(h_px);
+    Log("window: %dx%d pixels%s, SDL %d.%d.%d, video driver %s", w_px, h_px, borderless ? " (borderless)" : "",
+        SDL_VERSIONNUM_MAJOR(SDL_GetVersion()), SDL_VERSIONNUM_MINOR(SDL_GetVersion()),
+        SDL_VERSIONNUM_MICRO(SDL_GetVersion()), SDL_GetCurrentVideoDriver());
 }
 
 } // namespace
@@ -107,33 +139,37 @@ bool Open() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         Fatal("window: SDL_Init failed: %s (RT_HEADLESS=1 runs without a window)", SDL_GetError());
     }
-    // RT_WINDOW=windowed (default) | borderless (SDL3's desktop full screen: no frame, the display's size);
-    // RT_WINDOW_SIZE=<w>x<h> the windowed size. The game still renders at 720p; the presenter scales.
-    const char* mode = options::Get("RT_WINDOW");
-    const bool borderless = mode && std::strcmp(mode, "borderless") == 0;
-    if (mode && !borderless && std::strcmp(mode, "windowed") != 0) Fatal("window: RT_WINDOW=%s (windowed|borderless)", mode);
-    int width = kWidth, height = kHeight;
-    if (const char* size = options::Get("RT_WINDOW_SIZE")) {
-        if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width <= 0 || height <= 0) {
-            Fatal("window: RT_WINDOW_SIZE=%s (expected <width>x<height>)", size);
-        }
-    }
+    // The game still renders at its own size (RT_RES scales it); the presenter scales to the window.
+    const Mode m = ReadMode();
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    if (borderless) flags |= SDL_WINDOW_FULLSCREEN;
-    SDL_Window* w = SDL_CreateWindow("nxrt", width, height, flags);
+    if (m.borderless) flags |= SDL_WINDOW_FULLSCREEN;
+    SDL_Window* w = SDL_CreateWindow("Brothership Recomp", m.width, m.height, flags);
     if (!w) Fatal("window: SDL_CreateWindow failed: %s", SDL_GetError());
     input::Init();
     g_window = std::make_unique<SdlWindow>(w);
     SDL_ShowWindow(w);
     SDL_RaiseWindow(w);
-    SDL_PumpEvents();
-    int w_px = width, h_px = height;
-    SDL_GetWindowSizeInPixels(w, &w_px, &h_px);
-    resolution::Choose(h_px);
-    Log("window: %dx%d pixels%s, SDL %d.%d.%d, video driver %s", w_px, h_px, borderless ? " (borderless)" : "",
-        SDL_VERSIONNUM_MAJOR(SDL_GetVersion()), SDL_VERSIONNUM_MINOR(SDL_GetVersion()),
-        SDL_VERSIONNUM_MICRO(SDL_GetVersion()), SDL_GetCurrentVideoDriver());
+    ChooseResolution(w, m.borderless);
     return true;
+}
+
+void Reapply() {
+    if (!g_window) return;
+    SDL_Window* w = g_window->Get();
+    const Mode m = ReadMode();
+    if (!m.borderless) {
+        SDL_SetWindowFullscreen(w, false);
+        SDL_SetWindowSize(w, m.width, m.height);
+        SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    } else {
+        SDL_SetWindowFullscreen(w, true);
+    }
+    SDL_SyncWindow(w);
+    ChooseResolution(w, m.borderless);
+}
+
+SDL_Window* Sdl() {
+    return g_window ? g_window->Get() : nullptr;
 }
 
 bool IsOpen() {

@@ -41,6 +41,7 @@
 #include <dbghelp.h>
 #include <timeapi.h>
 #include <tlhelp32.h>
+#include <io.h>
 
 #include <algorithm>
 #include <atomic>
@@ -49,7 +50,9 @@
 #include <cstdlib>
 #include <csignal>
 #include <cstring>
+#include <cwctype>
 #include <exception>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -642,6 +645,181 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
         }
     }
     while (Clock::now() < deadline) YieldProcessor();
+}
+
+void AttachOutput(const std::string& log_file) {
+    const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD mode;
+    const DWORD type = err && err != INVALID_HANDLE_VALUE ? GetFileType(err) : FILE_TYPE_UNKNOWN;
+    // (a console or a file / pipe: output goes there. The NUL device - a program started in the background, e.g. the
+    // start screen's restart into the game - is a character device that is no console: no output, so the file.)
+    if (type != FILE_TYPE_UNKNOWN && (type != FILE_TYPE_CHAR || GetConsoleMode(err, &mode))) return;
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        std::freopen("CONOUT$", "w", stdout);
+        std::freopen("CONOUT$", "w", stderr);
+        return;
+    }
+    std::error_code ec;
+    const std::filesystem::path log(log_file), old = std::filesystem::path(log).replace_extension(".old.log");
+    std::filesystem::create_directories(log.parent_path(), ec);
+    std::filesystem::rename(log, old, ec);
+    // (still open in the run that started this one - its restart into the game -: added to, not emptied)
+    if (std::FILE* f = _wfreopen(log.wstring().c_str(), ec ? L"a" : L"w", stderr)) {
+        _dup2(_fileno(f), _fileno(stdout)); // (stdout too: --build's progress, the usage line)
+    }
+}
+
+std::string ExecutablePath() {
+    std::wstring w(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, w.data(), static_cast<DWORD>(w.size()));
+        if (n < w.size()) {
+            w.resize(n);
+            break;
+        }
+        w.resize(w.size() * 2);
+    }
+    const int len = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string s(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), len, nullptr, nullptr);
+    return s;
+}
+
+struct Child {
+    HANDLE process;
+};
+
+namespace {
+std::wstring Wide(const std::string& s) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
+
+/// One argument as CommandLineToArgvW reads it back (quotes and the backslashes before them escaped).
+void AppendQuoted(std::wstring& cmd, const std::wstring& a) {
+    if (!a.empty() && a.find_first_of(L" \t\n\v\"") == std::wstring::npos) {
+        cmd += a;
+        return;
+    }
+    cmd += L'"';
+    for (size_t i = 0;; ++i) {
+        size_t slashes = 0;
+        while (i < a.size() && a[i] == L'\\') ++i, ++slashes;
+        if (i == a.size()) {
+            cmd.append(slashes * 2, L'\\');
+            break;
+        }
+        if (a[i] == L'"') cmd.append(slashes * 2 + 1, L'\\');
+        else cmd.append(slashes, L'\\');
+        cmd += a[i];
+    }
+    cmd += L'"';
+}
+} // namespace
+
+Child* StartChild(const std::vector<std::string>& args, const std::string& log, std::string* error,
+                  const std::vector<std::string>& env) {
+    // the environment block: this process's, with `env`'s replacing those of the same name (names compare
+    // without case, as Windows does)
+    std::wstring block;
+    if (!env.empty()) {
+        std::vector<std::wstring> extra;
+        for (const std::string& e : env) extra.push_back(Wide(e));
+        const auto name = [](const std::wstring& v) {
+            std::wstring n = v.substr(0, v.find(L'=', 1)); // (a leading '=' is part of a drive variable's name)
+            for (wchar_t& c : n) c = static_cast<wchar_t>(towupper(c));
+            return n;
+        };
+        if (wchar_t* all = GetEnvironmentStringsW()) {
+            for (const wchar_t* p = all; *p; p += wcslen(p) + 1) {
+                const std::wstring v = p;
+                bool replaced = false;
+                for (const std::wstring& x : extra) replaced |= name(x) == name(v);
+                if (!replaced) block += v + L'\0';
+            }
+            FreeEnvironmentStringsW(all);
+        }
+        for (const std::wstring& x : extra) block += x + L'\0';
+        block += L'\0';
+    }
+    std::wstring cmd;
+    for (const std::string& a : args) {
+        if (!cmd.empty()) cmd += L' ';
+        AppendQuoted(cmd, Wide(a));
+    }
+    SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
+    const HANDLE out = CreateFileW(Wide(log).c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &sa,
+                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+    const auto close = [&] {
+        if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
+        if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
+    };
+    if (out == INVALID_HANDLE_VALUE || in == INVALID_HANDLE_VALUE) {
+        *error = "cannot open " + log + " (error " + std::to_string(GetLastError()) + ")";
+        close();
+        return nullptr;
+    }
+    // only these two handles inherited (other jobs' logs would stay open in every child otherwise)
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    std::vector<unsigned char> list_mem(size);
+    auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(list_mem.data());
+    HANDLE inherit[2] = {out, in};
+    STARTUPINFOEXW si{};
+    si.StartupInfo.cb = sizeof si;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdInput = in;
+    si.StartupInfo.hStdOutput = out;
+    si.StartupInfo.hStdError = out;
+    const bool listed = InitializeProcThreadAttributeList(list, 1, 0, &size) &&
+                        UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof inherit,
+                                                  nullptr, nullptr);
+    si.lpAttributeList = listed ? list : nullptr;
+    PROCESS_INFORMATION pi{};
+    const BOOL ok = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT |
+                                       (listed ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                                   block.empty() ? nullptr : block.data(), nullptr, &si.StartupInfo, &pi);
+    const DWORD err = GetLastError();
+    if (listed) DeleteProcThreadAttributeList(list);
+    close();
+    if (!ok) {
+        char text[256] = "";
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, err, 0, text, sizeof text,
+                       nullptr);
+        *error = std::string(text[0] ? text : "CreateProcess failed") + " (error " + std::to_string(err) + ")";
+        while (!error->empty() && (error->back() == '\n' || error->back() == '\r' || error->back() == ' ')) error->pop_back();
+        return nullptr;
+    }
+    CloseHandle(pi.hThread);
+    return new Child{pi.hProcess};
+}
+
+bool ChildDone(Child* c, int* code) {
+    if (WaitForSingleObject(c->process, 0) != WAIT_OBJECT_0) return false;
+    DWORD exit = 0;
+    GetExitCodeProcess(c->process, &exit);
+    *code = static_cast<int>(exit);
+    return true;
+}
+
+void KillChild(Child* c) {
+    TerminateProcess(c->process, 1);
+    WaitForSingleObject(c->process, INFINITE);
+}
+
+void FreeChild(Child* c) {
+    CloseHandle(c->process);
+    delete c;
+}
+
+uint64_t FreeMemory() {
+    MEMORYSTATUSEX m{};
+    m.dwLength = sizeof m;
+    return GlobalMemoryStatusEx(&m) ? m.ullAvailPhys : 0;
 }
 
 uint64_t CurrentThreadId() {

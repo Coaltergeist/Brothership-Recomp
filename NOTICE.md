@@ -12,8 +12,16 @@ License version 3 or later ([LICENSE](LICENSE)).
 | [glslang](https://github.com/KhronosGroup/glslang) | BSD-3-Clause and others (its LICENSE.txt) | shader compilation at build time |
 | [Boost](https://github.com/boostorg/boost) | BSL-1.0 | drippu's dependencies |
 | [SDL](https://github.com/libsdl-org/SDL) | zlib | window, input, sound |
+| [Dear ImGui](https://github.com/ocornut/imgui) | MIT | the start screen |
+| [ooz](https://github.com/powzix/ooz) (Powzix) | GPL-3.0-or-later (its source files' headers) | Oodle decompression of the game's archives, for the shader seed built on the player's PC |
+| [hactool](https://github.com/SciresM/hactool) (SciresM) | ISC | unpacking the player's own .nsp files with their own keys (shipped as `tools/hactool.exe`) |
+| [mbed TLS](https://github.com/Mbed-TLS/mbedtls) (in hactool) | Apache-2.0 | hactool's cryptography |
 
 ## Code adapted from other projects
+
+- **The 60FPS mod for Mario & Luigi: Brothership** by Fl4sh_#9174 ([github.com/Fl4sh9174](https://github.com/Fl4sh9174),
+  [ko-fi.com/Fl4sh9174](https://Ko-fi.com/Fl4sh9174)): the frame-rate patch built into the game (the Frame rate
+  setting switches it). Thanks to the author.
 
 - **drippu** (GPL-3.0-or-later / GPL-2.0-or-later): `runtime/src/nvn/rescaling_pass.cpp` is adapted from its
   `shader_recompiler/ir_opt/rescaling_pass.cpp`; `runtime/src/nvn/smaa.cpp` from its

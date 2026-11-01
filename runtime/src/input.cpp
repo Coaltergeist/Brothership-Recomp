@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <mutex>
 
 #include <SDL3/SDL.h>
+
+#include "options.h"
 
 namespace rt::input {
 namespace {
@@ -27,13 +30,38 @@ constexpr struct {
              {SDL_SCANCODE_LEFT, kLeft},   {SDL_SCANCODE_UP, kUp},        {SDL_SCANCODE_RIGHT, kRight},
              {SDL_SCANCODE_DOWN, kDown}};
 
-// By position, as on a Switch: SDL's face buttons are positional (south = bottom).
+// The face buttons: RT_BUTTONS=positions (default) as on a Switch - SDL's face buttons are positional (south =
+// bottom), so an Xbox pad's B is A -, or labels: the button the controller has printed A (Xbox, PlayStation's cross)
+// is A, from SDL's label for each controller (a Nintendo layout pad is the same either way).
+constexpr SDL_GamepadButton kFaceButtons[] = {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST,
+                                              SDL_GAMEPAD_BUTTON_NORTH};
+
+bool ByLabel() {
+    const char* v = options::Get("RT_BUTTONS");
+    return v && std::strcmp(v, "labels") == 0;
+}
+
+u64 FaceBit(SDL_Gamepad* g, SDL_GamepadButton b, bool by_label) {
+    if (by_label) {
+        switch (SDL_GetGamepadButtonLabel(g, b)) {
+        case SDL_GAMEPAD_BUTTON_LABEL_A:
+        case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return kA;
+        case SDL_GAMEPAD_BUTTON_LABEL_B:
+        case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return kB;
+        case SDL_GAMEPAD_BUTTON_LABEL_X:
+        case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return kX;
+        case SDL_GAMEPAD_BUTTON_LABEL_Y:
+        case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return kY;
+        default: break; // (no label known: by position)
+        }
+    }
+    return b == SDL_GAMEPAD_BUTTON_EAST ? kA : b == SDL_GAMEPAD_BUTTON_SOUTH ? kB : b == SDL_GAMEPAD_BUTTON_NORTH ? kX : kY;
+}
+
 constexpr struct {
     SDL_GamepadButton button;
     u64 bit;
-} kGamepadButtons[] = {{SDL_GAMEPAD_BUTTON_EAST, kA},           {SDL_GAMEPAD_BUTTON_SOUTH, kB},
-                       {SDL_GAMEPAD_BUTTON_NORTH, kX},          {SDL_GAMEPAD_BUTTON_WEST, kY},
-                       {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, kL},  {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kR},
+} kGamepadButtons[] = {{SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, kL},  {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kR},
                        {SDL_GAMEPAD_BUTTON_START, kPlus},       {SDL_GAMEPAD_BUTTON_BACK, kMinus},
                        {SDL_GAMEPAD_BUTTON_LEFT_STICK, kStickL}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK, kStickR},
                        {SDL_GAMEPAD_BUTTON_DPAD_LEFT, kLeft},   {SDL_GAMEPAD_BUTTON_DPAD_UP, kUp},
@@ -83,9 +111,13 @@ Pad Poll() {
     }
     KeyStick(keys, SDL_SCANCODE_A, SDL_SCANCODE_D, SDL_SCANCODE_S, SDL_SCANCODE_W, p.lx, p.ly);
     KeyStick(keys, SDL_SCANCODE_J, SDL_SCANCODE_L, SDL_SCANCODE_K, SDL_SCANCODE_I, p.rx, p.ry);
+    const bool by_label = ByLabel();
     for (const auto& [id, g] : g_pads) {
         for (const auto& b : kGamepadButtons) {
             if (SDL_GetGamepadButton(g, b.button)) p.buttons |= b.bit;
+        }
+        for (SDL_GamepadButton b : kFaceButtons) {
+            if (SDL_GetGamepadButton(g, b)) p.buttons |= FaceBit(g, b, by_label);
         }
         constexpr Sint16 kTrigger = 0x3000; // a trigger counts as pressed past ~40 %
         if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > kTrigger) p.buttons |= kZL;
@@ -108,6 +140,12 @@ void Open(SDL_JoystickID id) {
 }
 
 } // namespace
+
+bool BottomConfirms() {
+    const bool by_label = ByLabel();
+    if (g_pads.empty()) return by_label; // (no controller yet: an Xbox-style pad by label)
+    return FaceBit(g_pads.begin()->second, SDL_GAMEPAD_BUTTON_SOUTH, by_label) == kA;
+}
 
 void Init() {
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
@@ -141,14 +179,15 @@ void OnEvent(const SDL_Event& e) {
             g_pads.erase(it);
         }
         break;
-    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_DOWN: // (the function keys and the Capture button: Debug mode only, options.h Debug)
+        if (!options::Debug()) break;
         if (e.key.scancode == SDL_SCANCODE_F9 && !e.key.repeat) g_capture_key = true;
         if (e.key.scancode == SDL_SCANCODE_F10 && !e.key.repeat) g_toggle_key = true;
         if (e.key.scancode == SDL_SCANCODE_F8 && !e.key.repeat) g_fps_key = true;
         if (e.key.scancode == SDL_SCANCODE_F7 && !e.key.repeat) g_flag_key = true;
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_MISC1) g_flag_key = true; // not a Switch button the game sees
+        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_MISC1 && options::Debug()) g_flag_key = true; // (not a Switch button)
         break;
     case SDL_EVENT_KEY_UP:
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:

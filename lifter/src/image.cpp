@@ -99,16 +99,52 @@ void LoadNro(Image& img, const std::vector<u8>& f) {
     img.build_id.assign(f.begin() + 0x40, f.begin() + 0x60);
 }
 
+// An LZ4 block (an NSO's compressed segment) of exactly `size` bytes once decompressed.
+std::vector<u8> Lz4Block(const u8* in, size_t in_size, size_t size) {
+    std::vector<u8> out;
+    out.reserve(size);
+    const u8* const end = in + in_size;
+    const auto length = [&](size_t n) { // a 4-bit length of 15 continues in bytes of 255
+        if (n == 15) {
+            for (u8 b = 255; b == 255 && in < end; n += b) b = *in++;
+        }
+        return n;
+    };
+    while (in < end) {
+        const u8 token = *in++;
+        const size_t lit = length(token >> 4);
+        if (lit > size_t(end - in)) throw std::runtime_error("NSO: bad LZ4 data (literals)");
+        out.insert(out.end(), in, in + lit);
+        in += lit;
+        if (in >= end) break; // the last sequence has literals only
+        if (end - in < 2) throw std::runtime_error("NSO: bad LZ4 data (offset)");
+        const size_t back = in[0] | in[1] << 8;
+        in += 2;
+        const size_t match = length(token & 15) + 4;
+        if (back == 0 || back > out.size()) throw std::runtime_error("NSO: bad LZ4 data (match)");
+        for (size_t i = 0, from = out.size() - back; i < match; ++i) out.push_back(out[from + i]); // (may overlap)
+    }
+    if (out.size() != size) throw std::runtime_error("NSO: a segment decompressed to the wrong size");
+    return out;
+}
+
+// As the console's loader: compressed segments (flags bits 0-2, LZ4, the file's sizes at 0x60) decompressed, so the
+// game's exefs files are read as dumped (hactool's --uncompressed copies read the same).
 void LoadNso(Image& img, const std::vector<u8>& f) {
     img.format = "nso";
-    if (Read<u32>(f, 0xC) & 7) {
-        throw std::runtime_error("NSO segments are compressed; use hactool --uncompressed");
-    }
+    const u32 flags = Read<u32>(f, 0xC);
     for (int s = 0; s < 3; ++s) {
         const u64 h = 0x10 + s * 0x10;
+        const u32 off = Read<u32>(f, h), mem = Read<u32>(f, h + 4), size = Read<u32>(f, h + 8);
         const u64 bss = s == 2 ? Read<u32>(f, 0x3C) : 0;
-        Place(img, f, Read<u32>(f, h), Read<u32>(f, h + 4), Read<u32>(f, h + 8),
-              Read<u32>(f, h + 8) + bss, s == 0, s == 2);
+        if (!(flags & (1u << s))) {
+            Place(img, f, off, mem, size, size + bss, s == 0, s == 2);
+            continue;
+        }
+        const u32 packed = Read<u32>(f, 0x60 + s * 4);
+        if (u64{off} + packed > f.size()) throw std::runtime_error("NSO: a compressed segment runs past the file");
+        const std::vector<u8> seg = Lz4Block(f.data() + off, packed, size);
+        Place(img, seg, 0, mem, size, size + bss, s == 0, s == 2);
     }
     img.build_id.assign(f.begin() + 0x40, f.begin() + 0x60);
 }

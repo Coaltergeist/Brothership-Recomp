@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -16,6 +18,7 @@
 #include <atomic>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <thread>
 
 namespace rt::platform {
@@ -154,6 +157,77 @@ int64_t File::Size() const {
 
 void SleepUntil(std::chrono::steady_clock::time_point deadline) {
     std::this_thread::sleep_until(deadline);
+}
+
+void AttachOutput(const std::string&) {}
+
+std::string ExecutablePath() {
+    std::error_code ec;
+    return std::filesystem::read_symlink("/proc/self/exe", ec).string();
+}
+
+struct Child {
+    pid_t pid;
+};
+
+Child* StartChild(const std::vector<std::string>& args, const std::string& log, std::string* error,
+                  const std::vector<std::string>& env) {
+    std::vector<std::string> vars; // this process's, with `env`'s replacing those of the same name
+    for (char** e = environ; *e; ++e) {
+        const std::string v = *e, name = v.substr(0, v.find('='));
+        bool replaced = false;
+        for (const std::string& x : env) replaced |= x.substr(0, x.find('=')) == name;
+        if (!replaced) vars.push_back(v);
+    }
+    vars.insert(vars.end(), env.begin(), env.end());
+    std::vector<char*> envp;
+    for (std::string& v : vars) envp.push_back(v.data());
+    envp.push_back(nullptr);
+    std::vector<char*> argv;
+    for (const std::string& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&fa, 1, log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    pid_t pid = 0;
+    const int r = posix_spawn(&pid, argv[0], &fa, nullptr, argv.data(), envp.data());
+    posix_spawn_file_actions_destroy(&fa);
+    if (r != 0) {
+        *error = std::strerror(r);
+        return nullptr;
+    }
+    return new Child{pid};
+}
+
+bool ChildDone(Child* c, int* code) {
+    int status = 0;
+    if (waitpid(c->pid, &status, WNOHANG) != c->pid) return false;
+    *code = WIFSIGNALED(status) ? -WTERMSIG(status) : WEXITSTATUS(status);
+    return true;
+}
+
+void KillChild(Child* c) {
+    kill(c->pid, SIGKILL);
+    int status = 0;
+    waitpid(c->pid, &status, 0);
+}
+
+void FreeChild(Child* c) {
+    delete c;
+}
+
+uint64_t FreeMemory() {
+    FILE* f = std::fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    char line[256];
+    unsigned long long kb = 0;
+    while (std::fgets(line, sizeof line, f)) {
+        if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) break;
+    }
+    std::fclose(f);
+    return kb * 1024;
 }
 
 uint64_t CurrentThreadId() {
