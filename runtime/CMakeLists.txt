@@ -99,6 +99,13 @@ if (WIN32)
     # (the throw then ends the process).
     string(REPLACE "/EHsc" "/EHs" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
+# drippu's commit (the shader store's tag, drippu's version string): from git, or given by a build from a source copy
+# without .git (the Flatpak).
+set(RT_DRIPPU_COMMIT "" CACHE STRING "drippu's commit, 12 digits (empty: from git)")
+if (NOT RT_DRIPPU_COMMIT)
+    execute_process(COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/drippu rev-parse --short=12 HEAD
+                    OUTPUT_VARIABLE RT_DRIPPU_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+endif()
 # GPU and audio emulation (drippu's video_core and audio_core, built from third_party; see gpu/).
 add_subdirectory(gpu)
 
@@ -176,8 +183,6 @@ get_directory_property(RT_HOST_SHADERS_INCLUDE DIRECTORY gpu DEFINITION HS_OUT)
 target_include_directories(nxrt PRIVATE ${RT_HOST_SHADERS_INCLUDE})
 add_dependencies(nxrt host_shaders)
 # the shader store's tag names drippu's commit (another translator: stored stages ignored).
-execute_process(COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/drippu rev-parse --short=12 HEAD
-                OUTPUT_VARIABLE RT_DRIPPU_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 set_property(SOURCE src/nvn/shader_store.cpp APPEND PROPERTY COMPILE_DEFINITIONS "RT_DRIPPU_COMMIT=\"${RT_DRIPPU_COMMIT}\"")
 if (MSVC) # clang-cl: its -Wall means -Weverything; GCC's meaning through its GCC-style driver
     target_compile_options(nxrt PRIVATE /clang:-Wall /clang:-Wextra)

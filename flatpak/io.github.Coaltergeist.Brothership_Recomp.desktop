@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Brothership Recomp
+Comment=A native PC port built from your own copy of the game
+Exec=brothership-recomp
+Icon=io.github.Coaltergeist.Brothership_Recomp
+Terminal=false
+Categories=Game;

@@ -1,0 +1,28 @@
+# Brothership Recomp as a Flatpak. Built by tools/package_flatpak.sh, which stages the sources
+# beside this file (staged/: the tracked files, llvm/, mods/, DRIPPU_COMMIT) - nothing of the game, no keys.
+id: io.github.Coaltergeist.Brothership_Recomp
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: brothership-recomp
+# flatpak-builder 1.2 (Ubuntu 22.04's) runs appstream-compose, which the 26.08 SDK no longer has (newer builders use
+# appstreamcli); the metainfo still ships, only a repository's catalog would use the composed form
+appstream-compose: false
+finish-args:
+  # display: Wayland, X11 where there is none (gamescope on the Deck is X11)
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # the GPU (Vulkan) and controllers (Steam Input's virtual pad)
+  - --device=all
+  # sound (PipeWire serves the PulseAudio socket too)
+  - --socket=pulseaudio
+  # no network, no file access beyond the app's own folders: game files and keys come through the portal
+modules:
+  - name: brothership-recomp
+    buildsystem: simple
+    build-commands:
+      - sh flatpak/build.sh
+    sources:
+      - type: dir
+        path: staged

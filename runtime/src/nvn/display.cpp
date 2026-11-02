@@ -104,11 +104,13 @@ bool Create(Display& d, bool srgb) {
     const auto formats = physical.GetSurfaceFormatsKHR(surface);
     const VkFormat wanted[] = {srgb ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_B8G8R8A8_UNORM,
                                srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM};
+    // sRGB colour space only: a compositor with colour management may list the same format in linear or HDR
+    // spaces too, which would show the game's sRGB values brightened.
     VkSurfaceFormatKHR format = formats.at(0);
     for (VkFormat w : wanted) {
         bool found = false;
         for (const auto& f : formats) {
-            if (f.format == w) format = f, found = true;
+            if (f.format == w && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) format = f, found = true;
         }
         if (found) break;
     }
@@ -148,7 +150,8 @@ bool Create(Display& d, bool srgb) {
     d.extent = extent;
     d.srgb = srgb;
     d.stale = false;
-    Log("nvn: window swapchain %ux%u, format %d, %zu images", extent.width, extent.height, format.format, d.images.size());
+    Log("nvn: window swapchain %ux%u, format %d, colour space %d, %zu images", extent.width, extent.height, format.format,
+        format.colorSpace, d.images.size());
     return true;
 }
 

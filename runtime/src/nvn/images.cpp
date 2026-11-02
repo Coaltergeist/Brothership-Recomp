@@ -161,12 +161,24 @@ void NoteScaled(const TextureBuilder& b, const TextureImage& img) {
 std::shared_ptr<TextureImage> MakeImage(const TextureState& t, bool may_scale = true) {
     const TextureBuilder& b = t.settings;
     if (b.samples > 1) Fatal("nvn: multisample texture images are not implemented yet");
-    const VkFormat format = VulkanFormat(b.format);
+    VkFormat format = VulkanFormat(b.format);
     if (format == VK_FORMAT_UNDEFINED) Fatal("nvn: no Vulkan format for NVN format 0x%x yet", b.format);
-    const VkFormatFeatureFlags features =
-        Vk().device->GetPhysical().GetFormatProperties(format).optimalTilingFeatures;
     constexpr VkFormatFeatureFlags kNeeded = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                              VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+    const auto features_of = [](VkFormat f) {
+        return Vk().device->GetPhysical().GetFormatProperties(f).optimalTilingFeatures;
+    };
+    // AMD has no 24-bit depth (RADV on the Steam Deck, 2026-11-02): D32F + S8 instead, as yuzu's
+    // vulkan_device.cpp alternatives. Nothing reads the image's bytes as D24S8 (copies and views of
+    // another format stop the run above), so only depth precision differs. RT_NVN_D32S8=1: always (to compare
+    // on a device that has D24S8).
+    static const bool force_d32s8 = std::getenv("RT_NVN_D32S8") && *std::getenv("RT_NVN_D32S8") == '1';
+    if (format == VK_FORMAT_D24_UNORM_S8_UINT && (force_d32s8 || (features_of(format) & kNeeded) != kNeeded)) {
+        static std::once_flag told;
+        std::call_once(told, [] { Log("nvn: depth 24 + stencil 8 images are made as D32F + S8 (the device has no D24S8)"); });
+        format = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    }
+    const VkFormatFeatureFlags features = features_of(format);
     if ((features & kNeeded) != kNeeded) {
         Fatal("nvn: the Vulkan device cannot sample or copy format %d (NVN 0x%x)", format, b.format);
     }

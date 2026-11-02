@@ -228,6 +228,10 @@ bool HaveSymbols();
 /// Seconds since the runtime started (for timing logs).
 double Uptime();
 [[noreturn]] void Exit(int code);
+/// Ends this run and continues as this program again with `arg` (--seed, --after-seed, --play). POSIX: Exit's steps,
+/// then exec - the same process, so a Flatpak's sandbox and Steam (both follow the first process) see it go on;
+/// Windows: a new process, then Exit(0). Returns only when that could not be started (why; nothing ended yet).
+bool ExitInto(const char* arg, std::string* why);
 /// The calling thread's guest state for a report (Fatal, a crash): guest thread, pc (as --trace-pc records
 /// it), lr, sp.
 void LogGuestState();

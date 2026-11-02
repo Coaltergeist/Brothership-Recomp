@@ -30,6 +30,10 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#ifndef _WIN32
+#include <cerrno>
+#include <unistd.h> // (access, execv: ExitInto)
+#endif
 
 extern "C" {
 }
@@ -807,6 +811,29 @@ void Exit(int code) {
     std::_Exit(code); // other guest threads may still be running or blocked
 }
 
+bool ExitInto(const char* arg, std::string* why) {
+#ifdef _WIN32
+    if (!ui::StartSelf(arg, why)) return false;
+    Exit(0);
+#else
+    const std::string self = platform::ExecutablePath();
+    if (self.empty() || access(self.c_str(), X_OK) != 0) {
+        *why = "cannot run " + (self.empty() ? std::string("this program") : self) + ": " + std::strerror(errno);
+        return false;
+    }
+    FinishCaptures();
+    nvn::SavePipelineCacheAtExit();
+    Log("continuing as %s %s", self.c_str(), arg);
+    std::fflush(stdout);
+    std::fflush(stderr);
+    char* args[] = {const_cast<char*>(self.c_str()), const_cast<char*>(arg), nullptr};
+    execv(self.c_str(), args);
+    Log("could not continue as %s %s: %s", self.c_str(), arg, std::strerror(errno));
+    std::fflush(stderr);
+    std::_Exit(1); // (its steps are done: nothing to go back to)
+#endif
+}
+
 } // namespace rt
 
 using namespace rt;
@@ -975,7 +1002,8 @@ static void GameEnv(bool own_romfs, bool own_npdm) {
 }
 
 int main(int argc, char** argv) {
-    // A build without a console window started by a double-click: the log to the per-user folder (added
+    // A build without a console window started by a double-click, or on Linux from a desktop menu or a
+    // Flatpak (output to the journal): the log to the per-user folder (added
     // to by the runs of the start screen's hand-over, --seed and --after-seed: one log for the whole Build)
     bool continuing = false;
     for (int i = 1; i < argc; ++i) {
@@ -1093,19 +1121,10 @@ int main(int argc, char** argv) {
         if (player && !caches_named) {
             GameEnv(own_romfs, own_npdm);
             if (have_npdm()) {
-                const std::string self = platform::ExecutablePath();
-                const char* restart[] = {self.c_str(), "--play", nullptr};
-                const SDL_PropertiesID props = SDL_CreateProperties();
-                SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, restart);
-                SDL_SetBooleanProperty(props, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true); // (outlives us)
-                SDL_Process* p = SDL_CreateProcessWithProperties(props);
-                SDL_DestroyProperties(props);
-                if (p) {
-                    Log("start screen: the game's caches were opened before its files existed: starting again (%s --play)",
-                        self.c_str());
-                    Exit(0);
-                }
-                Log("start screen: could not start again (%s): playing without the seeded caches", SDL_GetError());
+                Log("start screen: the game's caches were opened before its files existed: starting again (--play)");
+                std::string why;
+                ExitInto("--play", &why);
+                Log("start screen: could not start again (%s): playing without the seeded caches", why.c_str());
             }
         }
     }

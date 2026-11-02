@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- placeholder icon of our own (no logo yet; never the game's art) -->
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#2b4a8b"/>
+  <circle cx="46" cy="64" r="26" fill="#e04848"/>
+  <circle cx="82" cy="64" r="26" fill="#3fae5a" fill-opacity="0.9"/>
+  <text x="64" y="74" font-family="sans-serif" font-size="28" font-weight="bold" fill="#ffffff" text-anchor="middle">BR</text>
+</svg>

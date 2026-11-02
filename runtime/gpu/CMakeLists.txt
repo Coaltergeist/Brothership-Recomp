@@ -182,9 +182,8 @@ if (WIN32)
     list(APPEND COMMON_SOURCES windows/timer_resolution.cpp)
 endif()
 list(TRANSFORM COMMON_SOURCES PREPEND ${DRIPPU_SRC}/common/)
-# scm_rev.cpp from drippu's template; the "revision" is the drippu submodule's.
-execute_process(COMMAND git -C ${DRIPPU} rev-parse --short HEAD OUTPUT_VARIABLE GIT_COMMIT
-                OUTPUT_STRIP_TRAILING_WHITESPACE)
+# scm_rev.cpp from drippu's template; the "revision" is the drippu submodule's (RT_DRIPPU_COMMIT, ../CMakeLists.txt).
+set(GIT_COMMIT ${RT_DRIPPU_COMMIT})
 set(GIT_REFSPEC main)
 set(GIT_DESC ${GIT_COMMIT})
 set(REPO_NAME "drippu (Brothership Recomp)")

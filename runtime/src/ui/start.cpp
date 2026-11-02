@@ -66,14 +66,12 @@ struct Screen {
 /// screen (build.h Steps).
 void HandOver(Screen& s) {
     s.handed_over = true;
-    if (!StartSelf("--seed", &s.handover_problem)) {
-        s.handover_problem = "Could not start the shader cache's build: " + s.handover_problem;
-        Log("start screen: %s", s.handover_problem.c_str());
-        return;
-    }
     Log("start screen: the shader cache is built by a run of its own (--seed): ending");
     nvn::KeepPipelineCacheFile();
-    Exit(0);
+    if (!ExitInto("--seed", &s.handover_problem)) {
+        s.handover_problem = "Could not start the shader cache's build: " + s.handover_problem;
+        Log("start screen: %s", s.handover_problem.c_str());
+    }
 }
 
 /// A folder chosen in the system's dialog (SDL calls back on a thread of its own): applied by the next frame.

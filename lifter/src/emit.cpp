@@ -376,17 +376,15 @@ void WriteFile(const std::string& path, const std::string& data) {
 
 } // namespace
 
-EmitStats Emit(const Image& img, const Analysis& a, const EmitOptions& opts) {
+void EmitHeaders(const EmitOptions& opts) {
     dr::g_translate_all = true; // no JIT behind us
     dr::g_emit_fpx = opts.fpx;
     const std::string dir = opts.out_dir + "/";
-    EmitStats stats;
 
     // The generated code calls fabs/fabsf, which drippu's header does not declare: GCC takes them as
     // builtins, clang 16+ (the Windows build) rejects the undeclared call. The include goes ahead of
     // drippu's header so drippu itself stays unmodified.
     WriteFile(dir + "recomp_runtime.h", std::string("#include <math.h>\n") + dr::RuntimeH());
-    WriteFile(dir + "recomp_runtime.c", dr::RuntimeC());
 
     // The shared header holds only the runtime contract; each file declares the
     // functions it calls, so a change to the function list recompiles only the
@@ -394,6 +392,13 @@ EmitStats Emit(const Image& img, const Analysis& a, const EmitOptions& opts) {
     WriteFile(dir + "nx_mem.h", opts.direct_mem ? fastmem::DirectHeader() : fastmem::Header());
     WriteFile(dir + "nx_funcs.h",
               std::string(kPrelude) + (opts.inline_mem || opts.direct_mem ? "#include \"nx_mem.h\"\n" : ""));
+}
+
+EmitStats Emit(const Image& img, const Analysis& a, const EmitOptions& opts) {
+    const std::string dir = opts.out_dir + "/";
+    EmitStats stats;
+    EmitHeaders(opts);
+    WriteFile(dir + "recomp_runtime.c", dr::RuntimeC());
     auto prototypes = [](const std::string& code) {
         // Every call is spelled "f_<hex>(c)" (functions) or "fp_<hex>(c)" (FP helpers).
         std::set<std::string> names;

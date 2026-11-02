@@ -104,7 +104,8 @@ inline void SleepFor(std::chrono::nanoseconds duration) { SleepUntil(std::chrono
 /// started by a double-click): the console of the terminal it was started from, if any, else `log_file` (the previous
 /// one kept as <name>.old.log; `continuing`: added to instead - a run that carries on its starter's, as the start
 /// screen's hand-over to `--seed` and back, ui/seed.h). Output that already goes somewhere (a console, a redirect:
-/// the bench scripts) is left alone. POSIX: nothing.
+/// the bench scripts) is left alone. POSIX: a terminal, a file or a pipe is left alone; the journal's socket (a
+/// desktop menu's or a Flatpak's start), /dev/null or no stream: the file.
 void AttachOutput(const std::string& log_file, bool continuing = false);
 
 /// A child process (the game builder's tools, build/build.h): `args` (UTF-8; args[0] the program's path), its stdout and

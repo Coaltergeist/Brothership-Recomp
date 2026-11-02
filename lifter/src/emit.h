@@ -58,4 +58,8 @@ struct EmitStats {
 
 EmitStats Emit(const Image& img, const Analysis& a, const EmitOptions& opts);
 
+// The lift's shared headers alone (recomp_runtime.h, nx_mem.h, nx_funcs.h), as Emit writes them: no game needed.
+// The runtime built without game code (NXRT_GAME=module) needs only these (--headers-only).
+void EmitHeaders(const EmitOptions& opts);
+
 } // namespace nxrecomp

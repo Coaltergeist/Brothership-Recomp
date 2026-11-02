@@ -227,7 +227,7 @@ int RunSeed() {
     }
     Log("seed: %s", build::StageName(build::Get().stage));
     std::string why;
-    if (!StartSelf("--after-seed", &why)) Log("seed: could not start the start screen again: %s", why.c_str());
+    if (!ExitInto("--after-seed", &why)) Log("seed: could not start the start screen again: %s", why.c_str());
     return code;
 }
 

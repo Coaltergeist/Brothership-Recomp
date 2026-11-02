@@ -9,6 +9,7 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -159,7 +160,22 @@ void SleepUntil(std::chrono::steady_clock::time_point deadline) {
     std::this_thread::sleep_until(deadline);
 }
 
-void AttachOutput(const std::string&, bool) {}
+void AttachOutput(const std::string& log_file, bool continuing) {
+    // (a terminal, a file or a pipe: output goes there - a developer's terminal, the test and bench scripts' redirects.
+    // Anything else - the journal's socket of a program started from a desktop menu or a Flatpak, /dev/null, a closed
+    // stream -: the file. A run that continues another by exec (rt::ExitInto) finds that file as its output already.)
+    struct stat st;
+    if (isatty(2) || (fstat(2, &st) == 0 && (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode)))) return;
+    std::error_code ec;
+    const std::filesystem::path log(log_file), old = std::filesystem::path(log).replace_extension(".old.log");
+    std::filesystem::create_directories(log.parent_path(), ec);
+    if (!continuing) std::filesystem::rename(log, old, ec);
+    else ec = std::make_error_code(std::errc::file_exists); // (added to, as below)
+    if (std::FILE* f = std::freopen(log.c_str(), ec ? "a" : "w", stderr)) {
+        std::fflush(stdout);
+        dup2(fileno(f), 1); // (stdout too: --build's progress, the usage line)
+    }
+}
 
 std::string ExecutablePath() {
     std::error_code ec;

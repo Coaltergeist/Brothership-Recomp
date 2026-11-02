@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Coaltergeist.Brothership_Recomp</id>
+  <name>Brothership Recomp</name>
+  <summary>A native PC port, built from your own game dump and keys</summary>
+  <developer id="io.github.Coaltergeist">
+    <name>The Brothership Recomp contributors</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      A static recompilation of the game into a native program. Nothing of the game ships with it: you provide your
+      own dump (the base game and the 1.0.1 update) and your console's keys, and the start screen builds the game on
+      your computer.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.Coaltergeist.Brothership_Recomp.desktop</launchable>
+  <url type="homepage">https://github.com/Coaltergeist/Brothership-Recomp</url>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
+</component>

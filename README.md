@@ -4,16 +4,19 @@ A static recompilation of *Mario & Luigi: Brothership* (Nintendo Switch, version
 in the spirit of [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) and
 [N64Recomp](https://github.com/N64Recomp/N64Recomp): the game's code is translated ahead of time into C and compiled
 for the PC, with the Switch's system services and its NVN graphics API provided by our own runtime (graphics on
-Vulkan). Windows first, the Steam Deck next.
+Vulkan). On Windows and on Linux / the Steam Deck.
 
 ## Status
 
-**Beta preview (Windows).** The game runs on Windows (title, plaza, menus, battles; 60 fps, internal resolution up
-to 4K, SMAA). The download is a launcher that installs the game from your own files: it unpacks your dump, translates
-and compiles the game's code and prepares its shaders on your PC (about 10-15 minutes, ~25 GB free disk space while
-it runs). The Steam Deck comes next.
+**Beta (Windows, Linux and Steam Deck).** The game runs on Windows (title, plaza, menus, battles; 60 fps, internal
+resolution up to 4K, SMAA) and on Linux as a Flatpak (on the Steam Deck: 30 fps at 720p). The download is a launcher
+that installs the game from your own files: it unpacks your dump, translates and compiles the game's code and prepares
+its shaders on your computer (about 10-15 minutes on a fast PC, longer on a Steam Deck; ~25 GB free disk space while
+it runs).
 
 ## Installing
+
+### Windows
 
 1. Download `BrothershipRecomp-Windows.zip` from the [releases](../../releases) and unzip it (not into Program Files).
 2. Start `BrothershipRecomp.exe`.
@@ -23,6 +26,18 @@ it runs). The Steam Deck comes next.
 
 Settings, saves, the build and the caches live in `%LOCALAPPDATA%\brothership-recomp`. To report a problem,
 attach `nxrt.log`, `build\build.log` and `build\unpack.log` from there (they never contain your keys).
+
+### Linux and Steam Deck
+
+1. Download `BrothershipRecomp-Linux.zip` from the [releases](../../releases) and unzip it.
+2. Install `BrothershipRecomp-Linux.flatpak`: open it (on a Steam Deck in Desktop Mode, Discover installs it), or
+   `flatpak install --user BrothershipRecomp-Linux.flatpak`. The first install also downloads the Freedesktop 26.08
+   runtime from Flathub (about 1 GB).
+3. Start **Brothership Recomp** from the application menu, set Game files and Keys with **Browse**, then **Build**
+   and **Play**. For Game Mode on a Steam Deck, add it to Steam as a non-Steam game.
+
+Settings, saves and the log live in `~/.var/app/io.github.Coaltergeist.Brothership_Recomp/config/brothership-recomp`
+(the zip's `README.txt` has the details).
 
 ## No game content
 
@@ -37,11 +52,12 @@ distributed. Please do not ask for game files or keys.
 - `runtime/` - what the recompiled code runs on: memory, threads, the Switch's system services, the NVN graphics
   layer on Vulkan (shader translation, resolution scaling, anti-aliasing), sound and input.
 - `tools/` - build, analysis and test tools (shader seed, cross-compilation, benchmarks).
+- `flatpak/` - the Linux package's manifest, build script and desktop files.
 - `tests/` - regression tests (a homebrew program run through the whole pipeline, platform tests).
 - `third_party/` - libraries as git submodules (see [NOTICE.md](NOTICE.md)).
 
 Building the launcher itself needs a developer setup (cross-compiled from WSL with clang; `tools/package_windows.sh`
-makes the download).
+makes the Windows download, `tools/package_flatpak.sh` the Linux one with flatpak-builder).
 
 ## License
 

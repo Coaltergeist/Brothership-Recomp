@@ -4,6 +4,7 @@
 // Usage: nxrecomp <input>... -o <out_dir> [--validate] [--no-address-seeds] [--no-export-seeds]
 //                 [--extra-seeds <file>] [--no-trace-pc | --trace-pc=func] [--no-fpx] [--no-fp-helpers] [--no-simd] [--no-direct-mem | --inline-mem]
 //                 [--base <hex>] [--link-only] [--patch <file.pchtxt | file.ips | dir>]... [--mod <file | dir>]...
+//        nxrecomp --headers-only -o <out_dir> [--no-fpx] [--no-direct-mem | --inline-mem]
 //
 // With several inputs, give them in load order (rtld main subsdk0.. sdk): they
 // are linked at --base (default 0x8000000, the runtime's image base), and
@@ -20,6 +21,8 @@
 // (RT_MODS=<name>, the folder's or file's name). The code words it changes are lifted in both
 // versions, its writes are listed in nx_table.c for the runtime to apply; <out_dir>/mods.txt lists them. A mod
 // that turns a word into a branch or writes over a relocation is refused (use --patch for it).
+// --headers-only writes only the lift's shared headers (recomp_runtime.h, nx_mem.h, nx_funcs.h), with no input: what
+// the runtime without game code (NXRT_GAME=module) is built against, e.g. in the Flatpak build.
 
 #include <chrono>
 #include <cstdio>
@@ -57,7 +60,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> inputs;
     std::string out_dir, extra;
     std::vector<std::string> patch_paths, mod_paths;
-    bool validate = false, link_only = false;
+    bool validate = false, link_only = false, headers_only = false;
     u64 load_base = 0x8000000;
     DiscoveryOptions dopts;
     EmitOptions eopts;
@@ -101,6 +104,8 @@ int main(int argc, char** argv) {
             mod_paths.push_back(argv[++i]);
         } else if (a == "--link-only") {
             link_only = true;
+        } else if (a == "--headers-only") {
+            headers_only = true;
         } else if (a[0] != '-') {
             inputs.push_back(a);
         } else {
@@ -108,10 +113,16 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (inputs.empty() || (out_dir.empty() && !validate)) {
+    if (headers_only && !out_dir.empty() && inputs.empty()) {
+        std::filesystem::create_directories(out_dir);
+        eopts.out_dir = out_dir;
+        EmitHeaders(eopts);
+        return 0;
+    }
+    if (headers_only || inputs.empty() || (out_dir.empty() && !validate)) {
         std::fprintf(stderr, "usage: %s <input>... -o <out_dir> [--validate] [--no-address-seeds] [--no-export-seeds] "
-                             "[--extra-seeds <file>] [--no-trace-pc | --trace-pc=func] [--no-fpx] [--no-fp-helpers] [--no-simd] [--no-direct-mem | --inline-mem] [--base <hex>] [--link-only] [--patch <file | dir>]... [--mod <file | dir>]...\n",
-                     argv[0]);
+                             "[--extra-seeds <file>] [--no-trace-pc | --trace-pc=func] [--no-fpx] [--no-fp-helpers] [--no-simd] [--no-direct-mem | --inline-mem] [--base <hex>] [--link-only] [--patch <file | dir>]... [--mod <file | dir>]...\n       %s --headers-only -o <out_dir> [--no-fpx] [--no-direct-mem | --inline-mem]\n",
+                     argv[0], argv[0]);
         return 2;
     }
     try {
