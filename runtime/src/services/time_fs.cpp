@@ -96,9 +96,12 @@ public:
 
 /// time:u/a/s. With shared memory (6.0+) the SDK and libnx read clocks from it directly (Brothership never calls
 /// GetCurrentTime): a system clock is its context's offset plus the steady clock, the steady clock is the guest
-/// tick counter in seconds (the steady and continuous-adjustment entries stay zero, clock source ids all zero),
-/// and the tick counter is the host's steady clock (rt.cpp ReadCntpct). So the local and network contexts
-/// (layout: drippu psc/time/shared_memory.h) get offset = Unix time - steady seconds, the host's clock.
+/// tick counter in seconds plus the steady entry's base (nanoseconds; zero here, as the continuous-adjustment
+/// entry), and the tick counter is the host's steady clock (rt.cpp ReadCntpct). So the local and network contexts
+/// (layout: drippu psc/time/shared_memory.h) get offset = Unix time - steady seconds, the host's clock. The steady
+/// entry and both contexts carry one non-zero clock source id: the SDK's CalculateSystemClockCurrentTime (sdk
+/// 0x3a5ccc) fails (0xcc74) for a zero id or one that differs from the steady clock's, and the user clock then
+/// reads 0 - saves dated 1970-01-01 + minutes even after the offset was set (2026-11-04).
 class TimeService : public Service {
 public:
     explicit TimeService(const char* n) : Service(n) {
@@ -117,11 +120,14 @@ public:
                 struct Context { // SystemClockContext: offset, SteadyClockTimePoint {time point, clock source id}
                     s64 offset, time_point;
                     u8 source_id[16];
-                } context{unix_now - steady, steady, {}};
+                } context{unix_now - steady, steady, {'b', 'r', 'o', 't', 'h', 'e', 'r', 's', 'h', 'i', 'p', '-', 'r', 't', 1, 0}};
                 static_assert(sizeof(Context) == 0x20);
                 for (const u64 at : {u64{0x38}, u64{0x80}}) { // LockFreeAtomicType: counter 0 -> value [0] at +8
                     std::memcpy(s->data.data() + at + 8, &context, sizeof context);
                     std::memcpy(s->data.data() + at + 8 + sizeof context, &context, sizeof context);
+                }
+                for (const u64 at : {u64{8}, u64{8 + 0x18}}) { // the steady entries {s64 base, source id}: the id
+                    std::memcpy(s->data.data() + at + 8, context.source_id, sizeof context.source_id);
                 }
                 Log("time: system clocks at %lld (Unix time), from the host", (long long)unix_now);
                 return s;

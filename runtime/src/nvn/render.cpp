@@ -232,11 +232,7 @@ const TextureImage::Attachment& AttachmentOf(TextureImage& img, const RenderTarg
     }
     const u32 level = TargetLevel(rt);
     // 3D: the depth slices of the level, attached as a 2D array (the image is 2D-array compatible, images.cpp)
-    const u32 all_layers = b.target == 4   ? b.depth
-                           : b.target == 8 ? 6
-                           : b.target == 3 ? b.height
-                           : b.target == 2 ? std::max(1u, b.depth >> level)
-                                           : 1;
+    const u32 all_layers = b.target == 2 ? std::max(1u, b.depth >> level) : ArrayLayers(b);
     u32 base = 0, layers = all_layers;
     if (rt.view.present && (v.set & kViewLayers)) {
         base = static_cast<u32>(v.base_layer);

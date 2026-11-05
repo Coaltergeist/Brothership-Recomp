@@ -42,7 +42,8 @@ void Init(const std::string& slots_path);
 /// Gives `fn` a host address; thread-safe. `name` is for logs and Describe.
 u64 RegisterHostFunction(const std::string& name, HostFn fn, void* user = nullptr);
 
-/// Diverts the lifted function named `symbol` (exactly one symbols.txt entry)
+/// Diverts the lifted function named `symbol` (exactly one symbols.txt entry, or
+/// a guest address "0x...", as Describe prints it: most functions have no name)
 /// to `fn`; returns the function's guest address. Before guest code runs.
 u64 OverrideGuestFunction(const std::string& symbol, HostFn fn, void* user = nullptr);
 
@@ -62,6 +63,12 @@ inline bool MaybeCallOverride(GuestContext* c, u64 target) {
     return g_override_count.load(std::memory_order_relaxed) != 0 && CallOverride(c, target);
 }
 bool IsOverridden(u64 target);
+
+/// RT_HLE_TRACE's site:<return address> items (hle.cpp): rt_jump hands them every indirect call while any is set.
+extern bool g_trace_sites;
+void NoteSite(GuestContext* c, u64 target);
+/// RT_HLE_TRACE's clock (also RT_TRACE_INPUT's, input.cpp): seconds since Init.
+double TraceSeconds();
 
 // --- Calling lifted code from host code ------------------------------------
 

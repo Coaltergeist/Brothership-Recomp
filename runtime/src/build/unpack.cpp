@@ -145,6 +145,37 @@ fs::path KeysForHactool(const fs::path& keys, const fs::path& work, std::vector<
     return copy;
 }
 
+/// A ticket's rights ID and encrypted title key as hex (title.keys' line: "<rights id> = <title key>"). The body
+/// follows the signature (its size by the signature type); in it the title key at 0x40, its type at 0x141 (0 common,
+/// 1 personalized: encrypted for one console, which hactool cannot use) and the rights ID at 0x160. False (`why`)
+/// for a damaged or personalized ticket.
+bool ReadTicket(const Nsp& n, std::string& rights, std::string& key, std::string* why) {
+    std::ifstream t(n.file, std::ios::binary);
+    t.seekg(static_cast<std::streamoff>(n.ticket->offset));
+    std::vector<uint8_t> b(std::min<uint64_t>(n.ticket->size, 0x400));
+    const std::string name = n.file.filename().string();
+    if (b.size() < 4 || !t.read(reinterpret_cast<char*>(b.data()), static_cast<std::streamsize>(b.size()))) {
+        return *why = "Damaged ticket in " + name, false;
+    }
+    uint32_t sig;
+    std::memcpy(&sig, b.data(), 4);
+    const size_t body = sig == 0x10000 || sig == 0x10003 ? 0x240 : sig == 0x10001 || sig == 0x10004 ? 0x140
+                        : sig == 0x10002 || sig == 0x10005 ? 0x80 : 0;
+    if (!body || b.size() < body + 0x170) return *why = "Damaged ticket in " + name, false;
+    if (b[body + 0x141] != 0) {
+        return *why = name + " has a personalized ticket (tied to one console). Dump it again with the dumper's option "
+                             "to remove console-specific data.", false;
+    }
+    static const char* hex = "0123456789abcdef";
+    const auto hexed = [&](size_t at) {
+        std::string s;
+        for (size_t i = at; i < at + 16; ++i) s += hex[b[i] >> 4], s += hex[b[i] & 15];
+        return s;
+    };
+    rights = hexed(body + 0x160), key = hexed(body + 0x40);
+    return true;
+}
+
 uint64_t TreeSize(const fs::path& dir) {
     uint64_t total = 0;
     std::error_code ec;
@@ -228,22 +259,25 @@ bool Unpack(const UnpackArgs& a, const std::function<void(double, const char*)>&
     if (!note.empty()) note += "\n";
     std::vector<std::string> args{a.hactool, "-k", Utf8(hactool_keys), "--exefsdir=" + Utf8(fs::path(a.game) / "exefs"),
                                   "--romfsdir=" + Utf8(fs::path(a.game) / "romfs")};
-    const Nsp& top = update ? *update : base;
-    if (top.ticket) {
-        std::ifstream t(top.file, std::ios::binary);
-        t.seekg(static_cast<std::streamoff>(top.ticket->offset + 0x180));
-        uint8_t key[16];
-        if (top.ticket->size < 0x190 || !t.read(reinterpret_cast<char*>(key), 16)) return clean(), *why = "Damaged ticket in " + top.file.filename().string(), false;
-        static const char* hex = "0123456789abcdef";
-        std::string k;
-        for (const uint8_t x : key) k += hex[x >> 4], k += hex[x & 15];
-        args.push_back("--titlekey=" + k);
+    // The title keys: --titlekey reaches only the NCA named last, so the base (with --basenca) finds its own in
+    // title.keys - an eShop dump's base has a ticket of its own (a cartridge's has none: our dumps, 2026-11-04). hactool
+    // reads that file only from $HOME/.switch, so HOME is the work folder for it (the player's own ~/.switch unread).
+    std::string title_keys;
+    for (const Nsp* n : {&base, update}) {
+        if (!n || !n->ticket) continue;
+        std::string rights, key;
+        if (!ReadTicket(*n, rights, key, why)) return clean(), false;
+        title_keys += rights + " = " + key + "\n";
+        if (n == (update ? update : &base)) args.push_back("--titlekey=" + key);
     }
+    fs::create_directories(fs::path(a.work) / ".switch", ec);
+    std::ofstream(fs::path(a.work) / ".switch" / "title.keys", std::ios::binary | std::ios::trunc) << title_keys;
     if (update) args.push_back("--basenca=" + Utf8(base_nca));
     args.push_back(Utf8(update ? update_nca : base_nca));
     const fs::path raw = fs::path(a.work) / "hactool.out";
     std::string error;
-    platform::Child* c = platform::StartChild(args, Utf8(raw), &error);
+    platform::Child* c = platform::StartChild(args, Utf8(raw), &error,
+                                              {"HOME=" + Utf8(fs::path(a.work)), "XDG_CONFIG_HOME=" + Utf8(fs::path(a.work))});
     if (!c) return clean(), *why = "Could not start hactool (" + error + "). If antivirus blocked it, allow the tools folder.", false;
     int code = 0;
     for (int tick = 0; !platform::ChildDone(c, &code); ++tick) {
@@ -261,15 +295,20 @@ bool Unpack(const UnpackArgs& a, const std::function<void(double, const char*)>&
     }
     platform::FreeChild(c);
     const std::string out = note + WithoutKeys(ReadText(raw));
-    std::ofstream(fs::path(a.log), std::ios::binary | std::ios::trunc) << out;
+    // (a crash loses the end of hactool's output - its stdout is buffered - so the exit code is the clue left; a crash
+    // is negative on both hosts: Windows' 0xC... status, POSIX's -signal)
+    std::ofstream(fs::path(a.log), std::ios::binary | std::ios::trunc)
+        << out << "\nhactool exit code " << code << (code < 0 ? " (a crash)" : "") << "\n";
     clean(); // (hactool's own output with the keys goes with it)
     if (code != 0 || !fs::exists(fs::path(a.game) / "exefs" / "main", ec) || TreeSize(fs::path(a.game) / "romfs") == 0) {
-        std::string last; // (its last non-empty line)
-        const size_t end = out.find_last_not_of("\r\n");
+        std::string last; // (its last line with text)
+        const size_t end = out.find_last_not_of(" \t\r\n");
         if (end != std::string::npos) {
             const size_t begin = out.rfind('\n', end);
             last = out.substr(begin == std::string::npos ? 0 : begin + 1, end - (begin == std::string::npos ? 0 : begin + 1) + 1);
+            last.erase(0, last.find_first_not_of(" \t"));
         }
+        if (code < 0) last = "hactool crashed (after \"" + last + "\").";
         *why = "Unpacking failed" + (last.empty() ? std::string(".") : ": " + last) +
                " Check that the keys match the game (prod.keys from the same console's firmware or newer). Log: " + a.log;
         fs::remove_all(fs::path(a.game), ec);

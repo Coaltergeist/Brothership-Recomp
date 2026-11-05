@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
 
 #include <SDL3/SDL.h>
 
+#include "hle.h"
 #include "options.h"
 
 namespace rt::input {
@@ -200,6 +202,11 @@ void OnEvent(const SDL_Event& e) {
     }
     const Pad p = Poll();
     std::lock_guard lock(g_mu);
+    // RT_TRACE_INPUT=1: each change of the buttons, on RT_HLE_TRACE's clock (presses against traced calls)
+    static const bool trace = std::getenv("RT_TRACE_INPUT") && *std::getenv("RT_TRACE_INPUT") == '1';
+    if (trace && p.buttons != g_pad.buttons) {
+        Log("input: t=%.4f buttons 0x%llx", hle::TraceSeconds(), static_cast<unsigned long long>(p.buttons));
+    }
     g_pad = p;
 }
 

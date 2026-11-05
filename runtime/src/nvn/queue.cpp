@@ -380,7 +380,7 @@ void Retire(Queue* q) {
             if (e.counter == 1) {
                 static std::atomic<u64> n{0}, nonzero{0};
                 const u64 k = n.fetch_add(1) + 1, z = nonzero.fetch_add(q->samples != 0) + (q->samples != 0);
-                if (k == 1 || k == 10 || k == 100 || k % 1000 == 0) {
+                if (k == 1 || k == 10 || k == 100 || k == 1000 || k % 100000 == 0) {
                     Log("nvn: %llu SAMPLES_PASSED reports, %llu of them non-zero (this one %llu)", (unsigned long long)k,
                         (unsigned long long)z, (unsigned long long)q->samples);
                 }

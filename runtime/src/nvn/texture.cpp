@@ -251,11 +251,7 @@ std::optional<StorageLayout> ComputeLayout(const TextureBuilder& b, std::string&
     const u32 alignment = compressible ? 0x10000 : 512;
     if (b.target == kTargetCubeArray) Unchecked("cube map arrays");
     if (b.target == 3) Unchecked("1D arrays");
-    const u64 layers = b.target == kTargetCube         ? 6
-                       : b.target == kTargetCubeArray  ? 6ULL * b.depth
-                       : b.target == kTarget2DArray    ? b.depth
-                       : b.target == 3 /* 1D array */  ? b.height
-                                                       : 1;
+    const u64 layers = ArrayLayers(b);
     const u64 height = b.target == 3 ? 1 : b.height;
     const u64 depth = b.target == kTarget3D ? b.depth : 1;
     // 3D: block height 0, except sparse 3D textures: the height solver's, at most 2 (fitted 2026-10-16 on 17 3D

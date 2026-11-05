@@ -88,6 +88,10 @@ const std::vector<Option>& All() {
         {"RT_FPS", "Frame rate", "30|60|uncapped", "30|60|Uncapped", "30"}, // (60 and up need the 60 fps mod)
         {"RT_VSYNC", "VSync", "on|off", "On|Off", "on"},
         {"RT_BUTTONS", "Button layout", "positions|labels", "Switch positions|Controller labels", "positions"},
+        {"RT_LANGUAGE", "Language", "en-US|en-GB|fr|fr-CA|de|it|es|es-419|nl|pt-BR|ja|ko|zh-Hans|zh-Hant",
+         "English (US)|English (UK)|French|French (Canada)|German|Italian|Spanish|Spanish (Latin America)|Dutch|"
+         "Portuguese (Brazil)|Japanese|Korean|Chinese (Simplified)|Chinese (Traditional)",
+         "en-US"}, // (the game's 14, by its per-language assets; am's GetDesiredLanguage answers it)
         {"RT_DEBUG", "Debug mode", "off|on", "Off|On", "off"}, // (the FPS box, F7-F10: Debug())
         {"RT_MODS", "Mods", "<mod>[,<mod>...]|all|none", nullptr, "none"},
         {"RT_GAME_DIR", "Game files", "<folder>", nullptr, ""},   // (the dump: exefs/ + romfs/, build/build.h)

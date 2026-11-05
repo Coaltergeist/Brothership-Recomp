@@ -24,6 +24,13 @@ struct TextureBuilder {
 };
 static_assert(sizeof(TextureBuilder) <= 96);
 
+/// The layers of a texture of these settings: a 1D array's height, a cube map's 6, a 2D array's or a cube map
+/// array's depth - NVN counts a cube map array's depth in faces, as GL (the driver's layout setup, sdk 0x45bfc0:
+/// its target table sends 9 to the 2D array's branch, only 8 sets 6; 2026-11-04) - and 1 for the rest (3D: slices).
+inline u32 ArrayLayers(const TextureBuilder& b) {
+    return b.target == 3 ? b.height : b.target == 4 || b.target == 9 ? b.depth : b.target == 8 ? 6 : 1;
+}
+
 /// NVNtextureView, inline in the game's storage (16 bytes; SDK 3.5.0 to 12.3.2
 /// use 16 to 36). Each property counts only when its bit in `set` is on.
 struct TextureView {

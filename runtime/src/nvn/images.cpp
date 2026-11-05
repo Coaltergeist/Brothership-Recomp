@@ -119,7 +119,7 @@ VkFormat VulkanFormat(u32 id) {
 namespace {
 
 constexpr u32 kTarget1D = 0, kTarget2D = 1, kTarget3D = 2, kTarget1DArray = 3, kTarget2DArray = 4,
-              kTargetRectangle = 7, kTargetCube = 8;
+              kTargetRectangle = 7, kTargetCube = 8, kTargetCubeArray = 9;
 
 std::mutex g_images_mu;
 std::map<u64, std::shared_ptr<TextureImage>> g_images; // by storage address
@@ -199,6 +199,7 @@ std::shared_ptr<TextureImage> MakeImage(const TextureState& t, bool may_scale = 
     case kTargetRectangle: break;
     case kTarget2DArray: layers = b.depth; break;
     case kTargetCube: layers = 6, flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT; break;
+    case kTargetCubeArray: layers = b.depth, flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT; break;
     case kTarget3D: // render targets: slices attached as a 2D array (render.cpp)
         type = VK_IMAGE_TYPE_3D, extent.depth = b.depth;
         if (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
@@ -269,7 +270,7 @@ VkImageView SampledView(TextureImage& img, const TextureState& t, const ViewArg&
     u32 level0 = has && (v.set & kViewLevels) ? v.base_level : 0, nlevels = levels - std::min(level0, levels - 1);
     if (has && (v.set & kViewLevels) && v.num_levels > 0) nlevels = v.num_levels;
     if (level0 >= levels || level0 + nlevels > levels) Fatal("nvn: view levels %u+%u of %u", level0, nlevels, levels);
-    const u32 all_layers = b.target == kTarget2DArray ? b.depth : b.target == kTargetCube ? 6 : b.target == kTarget1DArray ? b.height : 1;
+    const u32 all_layers = ArrayLayers(b);
     u32 layer0 = has && (v.set & kViewLayers) ? static_cast<u32>(v.base_layer) : 0;
     u32 nlayers = all_layers - std::min(layer0, all_layers);
     if (has && (v.set & kViewLayers) && v.num_layers > 0) nlayers = static_cast<u32>(v.num_layers);
@@ -322,7 +323,7 @@ VkImageView StorageView(TextureImage& img, const TextureState& t, const ViewArg&
         Fatal("nvn: an image of format 0x%x through a view of format 0x%x is not implemented yet", b.format, v.format);
     }
     const u32 level = has && (v.set & kViewLevels) ? v.base_level : 0;
-    const u32 all_layers = b.target == kTarget2DArray ? b.depth : b.target == kTargetCube ? 6 : b.target == kTarget1DArray ? b.height : 1;
+    const u32 all_layers = ArrayLayers(b);
     u32 layer0 = has && (v.set & kViewLayers) ? static_cast<u32>(v.base_layer) : 0;
     u32 nlayers = all_layers - std::min(layer0, all_layers);
     if (has && (v.set & kViewLayers) && v.num_layers > 0) nlayers = static_cast<u32>(v.num_layers);
@@ -442,11 +443,11 @@ void SetSampleCounting(const Vulkan::vk::CommandBuffer& cmd, SampleCounting* cou
 
 std::atomic<u64> g_pass_draws{0}, g_passes_begun{0};
 
-/// Logs how often draws share a pass, every 10,000 draws.
+/// Logs how often draws share a pass: at 10,000 draws, then every 1,000,000.
 void CountDrawPass(bool kept) {
     if (!kept) g_passes_begun.fetch_add(1, std::memory_order_relaxed);
     const u64 n = g_pass_draws.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n % 10000 == 0) {
+    if (n == 10000 || n % 1000000 == 0) {
         Log("nvn draw: %llu draws in %llu render passes", (unsigned long long)n,
             (unsigned long long)g_passes_begun.load(std::memory_order_relaxed));
     }
@@ -526,8 +527,7 @@ std::unique_ptr<ImageDownload> StartDownload(const TextureState& t, u32 level) {
     const bool sliced = b.target == kTarget3D, array1d = b.target == kTarget1DArray;
     u32 lw = std::max(1u, b.width >> level), lh = array1d ? 1 : std::max(1u, b.height >> level);
     if (img->Scaled()) lw = img->UpSize(lw), lh = img->UpSize(lh); // (one level, 2D)
-    const u32 count = sliced ? std::max(1u, b.depth >> level)
-                             : b.target == kTarget2DArray ? b.depth : b.target == kTargetCube ? 6 : array1d ? b.height : 1;
+    const u32 count = sliced ? std::max(1u, b.depth >> level) : ArrayLayers(b);
     const u32 wb = CeilDiv(lw, f->block_w), hb = CeilDiv(lh, f->block_h);
     const u64 size = u64{wb} * hb * f->bytes * count;
     const auto& dev = *Vk().device;
@@ -756,7 +756,7 @@ CopyGeometry Geometry(const char* fn, const CopyBufferToTextureRecord& r) {
 
     const u32 lw = std::max(1u, b.width >> level), lh = array1d ? 1 : std::max(1u, b.height >> level);
     const u32 ld = b.target == kTarget3D ? std::max(1u, b.depth >> level) : 1;
-    const u32 layers = b.target == kTarget2DArray ? b.depth : b.target == kTargetCube ? 6 : array1d ? b.height : 1;
+    const u32 layers = ArrayLayers(b);
     const bool sliced = b.target == kTarget3D;
     if (level >= std::max<u32>(b.levels, 1) || xb + wb > CeilDiv(lw, f->block_w) ||
         yb + hb > CeilDiv(lh, f->block_h) || (sliced ? first + count > ld : base_layer + first + count > layers)) {

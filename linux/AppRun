@@ -1,0 +1,5 @@
+#!/bin/sh
+# The AppImage's entry: the program, by exec - one process, as Steam follows the first one; nothing
+# of the environment changed. (APPDIR: set by the AppImage runtime; else the folder of this file, for an extracted copy.)
+HERE=${APPDIR:-$(dirname "$(readlink -f "$0")")}
+exec "$HERE/usr/bin/brothership-recomp" "$@"

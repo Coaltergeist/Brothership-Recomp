@@ -146,7 +146,7 @@ else()
     target_compile_options(ooz PRIVATE -w -fno-strict-aliasing -O1)
 endif()
 
-add_executable(nxrt src/rt.cpp src/game/load.cpp src/build/build.cpp src/build/unpack.cpp src/seed/extract.cpp src/ui/start.cpp src/ui/seed.cpp src/writetrack.cpp src/svc.cpp src/threads.cpp src/kernel.cpp src/ipc.cpp src/capture.cpp src/gpu.cpp src/audio.cpp src/npdm.cpp src/perf.cpp src/diag.cpp src/window.cpp src/options.cpp src/mods.cpp src/resolution.cpp src/input.cpp src/fpx_probe.cpp src/overlay.cpp src/hle.cpp src/nvn/tap.cpp
+add_executable(nxrt src/rt.cpp src/game/load.cpp src/build/build.cpp src/build/unpack.cpp src/seed/extract.cpp src/ui/start.cpp src/ui/seed.cpp src/writetrack.cpp src/svc.cpp src/threads.cpp src/kernel.cpp src/ipc.cpp src/capture.cpp src/gpu.cpp src/audio.cpp src/npdm.cpp src/perf.cpp src/diag.cpp src/window.cpp src/options.cpp src/mods.cpp src/resolution.cpp src/input.cpp src/fpx_probe.cpp src/overlay.cpp src/hle.cpp src/sequencer_fix.cpp src/nvn/tap.cpp
                     src/nvn/layer.cpp src/nvn/device.cpp src/nvn/state.cpp src/nvn/memory.cpp src/nvn/cmdbuf.cpp src/nvn/commands.cpp src/nvn/sampler.cpp src/nvn/texture.cpp src/nvn/program.cpp src/nvn/images.cpp src/nvn/shaders.cpp src/nvn/compute_translate.cpp src/nvn/rescaling_pass.cpp src/nvn/smaa.cpp src/nvn/shadertest.cpp src/nvn/window.cpp src/nvn/display.cpp src/nvn/render.cpp src/nvn/binds.cpp src/nvn/draws.cpp src/nvn/pipeline.cpp src/nvn/formats.cpp src/nvn/queue.cpp src/nvn/heavy.cpp src/nvn/shader_store.cpp src/nvn/research.cpp src/nvn/difftest.cpp
                     ${RT_SERVICES} ${RT_PLATFORM})
 target_link_libraries(nxrt PRIVATE video_core audio_core imgui ooz SDL3::SDL3-static Threads::Threads)

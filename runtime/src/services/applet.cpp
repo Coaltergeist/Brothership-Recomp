@@ -1,8 +1,11 @@
 // am (appletOE) for an application, and apm (performance management).
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 
 #include "../ipc.h"
+#include "../options.h"
 #include "../services.h"
 
 namespace rt {
@@ -183,8 +186,12 @@ public:
             ctx.Push<u64>(kSize);
         });
         Register(21, "GetDesiredLanguage", [](IpcContext& ctx) {
-            u64 code = 0; // LanguageCode: the language tag as 8 bytes
-            std::memcpy(&code, "en-US", 5);
+            // LanguageCode: the language tag as 8 bytes. The system picks one the game supports, so the game takes
+            // the answer as is (RT_LANGUAGE; the dump holds the assets of all 14).
+            const char* lang = options::Get("RT_LANGUAGE");
+            if (!lang) lang = "en-US";
+            u64 code = 0;
+            std::memcpy(&code, lang, std::min<size_t>(std::strlen(lang), 8));
             ctx.Push<u64>(code);
         });
         Register(22, "SetTerminateResult", [](IpcContext& ctx) {

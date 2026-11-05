@@ -2261,7 +2261,7 @@ bool TranslateDrawRecord(Translator& t, Op op, const u8* p, size_t size) {
             }
         }
         const u64 n = g_dispatched + g_dispatch_skipped;
-        if (n % 1000 == 0) {
+        if (n <= 10000 ? n % 1000 == 0 : n % 100000 == 0) {
             Log("nvn dispatch: %llu dispatched, %llu skipped; reads copied on the GPU: %llu (%llu of an earlier "
                 "submission's writes)", (unsigned long long)g_dispatched.load(), (unsigned long long)g_dispatch_skipped.load(),
                 (unsigned long long)g_gpu_reads.load(), (unsigned long long)g_earlier_reads.load());
@@ -2378,7 +2378,7 @@ bool TranslateDrawRecord(Translator& t, Op op, const u8* p, size_t size) {
         }
     }
     const u64 n = g_drawn + g_skipped;
-    if (n % 1000 == 0) {
+    if (n <= 10000 ? n % 1000 == 0 : n % 1000000 == 0) { // (every 1000 draws filled 30 % of a player's log)
         Log("nvn draw: %llu drawn, %llu skipped, %llu waited for their pipeline", (unsigned long long)g_drawn.load(),
             (unsigned long long)g_skipped.load(), (unsigned long long)g_waiting.load());
     }

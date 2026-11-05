@@ -4,6 +4,7 @@
 #include "diag.h"
 #include "gpu.h"
 #include "hle.h"
+#include "sequencer_fix.h"
 #include "mods.h"
 #include "ui/start.h"
 #include "ui/seed.h"
@@ -57,20 +58,19 @@ Memory g_mem;
 namespace {
 bool g_direct_mem = false; // the lift accesses guest memory directly (LiftDirectBase)
 }
-// RT_TRACE_SVC=0: no log line per SVC and IPC call (on by default: the log is the main debugging record);
-// RT_TRACE_SVC=first: each SVC trace site and each IPC command logged its first 100 times, IPC calls that fail
-// always (long play sessions: the full trace is ~11 MB a minute; unknown commands stop the run either way).
+// RT_TRACE_SVC=first (the default since 2026-11-04: players' logs were 98 % trace lines, 13-165 MB a session):
+// each SVC trace site and each IPC command logged its first 100 times, IPC calls that fail always (unknown commands
+// stop the run either way); RT_TRACE_SVC=1: every SVC and IPC call (the full trace, ~11 MB a minute);
+// RT_TRACE_SVC=0: none.
 bool g_trace_svc = [] {
     const char* e = std::getenv("RT_TRACE_SVC");
     return !(e && *e == '0');
 }();
 bool g_trace_all = [] {
     const char* e = std::getenv("RT_TRACE_SVC");
-    if (e && std::strcmp(e, "first") == 0) {
-        std::fputs("[rt] SVC and IPC trace: the first 100 lines of each kind, then failing IPC calls (RT_TRACE_SVC=first)\n", stderr);
-        return false;
-    }
-    return true;
+    if (e && *e && std::strcmp(e, "first") != 0) return true;
+    std::fputs("[rt] SVC and IPC trace: the first 100 lines of each kind, then failing IPC calls (RT_TRACE_SVC=1: all)\n", stderr);
+    return false;
 }();
 
 namespace {
@@ -866,6 +866,7 @@ extern "C" void rt_host_jump(GuestContext* c, uint64_t target) {
         ExitCurrentThread();
     }
     MaybePreempt();
+    if (hle::g_trace_sites) hle::NoteSite(c, target);
     if (hle::IsHostAddress(target)) {
         hle::CallHost(c, target);
         return;
@@ -950,7 +951,8 @@ static std::vector<std::string> BuiltMods() {
     return built;
 }
 
-static void ApplyMods() {
+/// Applies the enabled mods' exefs patches; whether the frame-rate patch is among them.
+static bool ApplyMods() {
     const NxModTable& t = LiftMods();
     const std::vector<std::string> built = BuiltMods();
     const std::vector<std::string>& enabled = mods::Enabled(built);
@@ -970,6 +972,7 @@ static void ApplyMods() {
         Log("mods: enabled: %s; exefs patches on: %s; built in: %zu", all.empty() ? "none" : all.c_str(),
             on.empty() ? "none" : on.c_str(), built.size());
     }
+    return std::find(enabled.begin(), enabled.end(), mods::kFrameRateMod) != enabled.end();
 }
 
 /// A player start's RT_ROMFS and RT_NPDM from the game folder (build.h), unless the environment set them (`own`: the
@@ -1167,7 +1170,7 @@ int main(int argc, char** argv) {
                   s.perm & 4 ? "image .text" : s.perm & 2 ? "image data" : "image rodata");
     }
     std::memcpy(g_mem.Raw(kImageBase), image.data(), image.size());
-    ApplyMods();
+    const bool frame_rate_patch = ApplyMods();
 
     const u64 stack_base = kStackRegion;
     g_mem.Map(stack_base, kMainStackSize, kRead | kWrite, kMemStack, "main stack");
@@ -1177,6 +1180,10 @@ int main(int argc, char** argv) {
         // (std::filesystem: Windows paths separate with '\\', \\wsl.localhost\... ones too)
         const std::filesystem::path dir = std::filesystem::path(image_path).parent_path();
         hle::Init(((dir.empty() ? std::filesystem::path(".") : dir) / "slots.txt").string());
+    }
+    // Sequencer repeater events every frame above 30 fps (sequencer_fix.cpp); RT_SEQUENCER_FIX=0: off (A/B runs).
+    if (const char* v = std::getenv("RT_SEQUENCER_FIX"); frame_rate_patch && !(v && std::strcmp(v, "0") == 0)) {
+        sequencer_fix::Install();
     }
     nvn::Init();
     nvn::tap::Init();

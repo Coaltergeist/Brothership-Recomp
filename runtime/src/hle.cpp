@@ -1,17 +1,21 @@
 // Host functions callable from guest code: registry, dispatch, overrides (hle.h).
 #include "hle.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <map>
 #include <unordered_map>
+#include <vector>
 
 namespace rt::hle {
 
 std::atomic<u32> g_override_count{0};
+bool g_trace_sites = false;
 
 namespace {
 
@@ -115,6 +119,163 @@ void InstallPassthroughs(const char* list) {
     }
 }
 
+// --- RT_HLE_TRACE: chosen functions' calls and chosen call sites' targets, with times ---------
+//
+// RT_HLE_TRACE=<item>[,<item>...] (measuring what the game does per frame, e.g. which battle checks count frames):
+// - a function (a symbols.txt name or a guest address 0x...): every call that goes through a pointer - virtual calls,
+//   the Blueprint VM's calls of native functions - logged with the time, the thread (its context, as a tag), x0-x3,
+//   v0-v1 as floats, x0 and v0 after the call and the caller; <function>!x2: also the 8 bytes x2 pointed at, after
+//   the call (a native function's Blueprint thunk, (object, FFrame&, result*): its result);
+// - site:<return address>: the indirect call that returns there (a virtual call: the address after its BLR) - every
+//   call: its target (a virtual function's implementation, to trace next), x0-x2 and v0 as a float.
+// <function>!count: its calls only counted - every other function's line ends with the counts since the line before
+//   (calls per frame of a function called too often to log, next to a once-a-frame function's lines).
+// <function>!bt: its callers instead - each distinct chain of return addresses (the frame-pointer chain, up to 40)
+//   logged once as chain #k, then counted as the !count items are: "chain#k=N" (which call paths run per frame).
+// <item>@<n>: at most n lines for it (default 100000). Direct BL calls are not caught (hle.h).
+
+struct Traced {
+    std::string name;
+    u64 target = 0;
+    u64 limit = 100000;
+    bool result_x2 = false;
+    bool count_only = false;
+    bool backtrace = false;
+    std::atomic<u64> calls{0};
+    std::atomic<u64> since{0}; // count_only: calls since the last line
+};
+std::vector<Traced*> g_counted; // the count_only items; installed before guest code runs
+
+// !bt items' call chains: their ids and the calls of each since the last line.
+std::mutex g_chain_mu;
+std::map<std::vector<u64>, u32> g_chain_ids;
+std::vector<u64> g_chain_since;
+
+std::vector<u64> CallChain(GuestContext* c) {
+    std::vector<u64> chain{c->x[30]};
+    u64 fp = c->x[29];
+    for (int i = 0; i < 40 && fp && !(fp & 15); ++i) {
+        const Region* r = g_mem.Find(fp);
+        if (!r || fp + 16 > r->base + r->size || !(r->perm & kRead)) break;
+        u64 frame[2];
+        std::memcpy(frame, g_mem.Raw(fp), 16);
+        if (!frame[1]) break;
+        chain.push_back(frame[1]);
+        if (frame[0] <= fp) break; // stacks grow down: callers' frames lie above
+        fp = frame[0];
+    }
+    return chain;
+}
+
+void NoteChain(GuestContext* c, const Traced& t) {
+    std::vector<u64> chain = CallChain(c);
+    std::lock_guard lock(g_chain_mu);
+    auto [it, fresh] = g_chain_ids.emplace(std::move(chain), static_cast<u32>(g_chain_since.size()));
+    if (fresh) {
+        g_chain_since.push_back(0);
+        std::string text;
+        for (u64 ret : it->first) text += (text.empty() ? "" : " <- ") + Describe(ret);
+        Log("hle trace: t=%.4f %s chain #%u: %s", TraceSeconds(), t.name.c_str(), it->second, text.c_str());
+    }
+    ++g_chain_since[it->second];
+}
+
+float LowFloat(u64 bits) {
+    float f;
+    const u32 b = static_cast<u32>(bits);
+    std::memcpy(&f, &b, 4);
+    return f;
+}
+
+void TracedFn(GuestContext* c, void* user) {
+    auto* t = static_cast<Traced*>(user);
+    if (t->backtrace) {
+        NoteChain(c, *t);
+        CallOriginal(c, t->target);
+        return;
+    }
+    if (t->count_only) {
+        t->since.fetch_add(1, std::memory_order_relaxed);
+        CallOriginal(c, t->target);
+        return;
+    }
+    const u64 n = t->calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    const u64 a0 = c->x[0], a1 = c->x[1], a2 = c->x[2], a3 = c->x[3], lr = c->x[30];
+    const float f0 = LowFloat(c->vreg[0][0]), f1 = LowFloat(c->vreg[1][0]);
+    const double at = TraceSeconds();
+    CallOriginal(c, t->target);
+    if (n <= t->limit) {
+        char result[40] = "";
+        if (t->result_x2) {
+            u64 v = 0;
+            if (const u8* p = g_mem.Access(a2, 8, kRead)) std::memcpy(&v, p, 8);
+            std::snprintf(result, sizeof result, ", *x2 0x%llx", (unsigned long long)v);
+        }
+        std::string counts;
+        for (Traced* k : g_counted) {
+            counts += (counts.empty() ? "; counts " : " ") + k->name + "=" + std::to_string(k->since.exchange(0, std::memory_order_relaxed));
+        }
+        {
+            std::lock_guard lock(g_chain_mu);
+            for (size_t k = 0; k < g_chain_since.size(); ++k) {
+                if (!g_chain_since[k]) continue;
+                counts += (counts.empty() ? "; " : " ") + std::string("chain#") + std::to_string(k) + "=" + std::to_string(g_chain_since[k]);
+                g_chain_since[k] = 0;
+            }
+        }
+        Log("hle trace: t=%.4f %s #%llu thread %04llx (0x%llx, 0x%llx, 0x%llx, 0x%llx; %g, %g) -> 0x%llx, %g%s, from %s%s%s",
+            at, t->name.c_str(), (unsigned long long)n, (unsigned long long)(reinterpret_cast<uintptr_t>(c) & 0xffff),
+            (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)a3, f0, f1,
+            (unsigned long long)c->x[0], LowFloat(c->vreg[0][0]), result, Describe(lr).c_str(),
+            n == t->limit ? " (no more logged)" : "", counts.c_str());
+    }
+}
+
+struct Site {
+    u64 ret = 0;
+    u64 limit = 100000;
+    std::mutex mu;
+    std::unordered_map<u64, u64> targets; // target -> calls
+    u64 lines = 0;
+};
+std::vector<std::unique_ptr<Site>> g_sites; // installed before guest code runs, read-only afterwards
+
+void InstallTrace(const char* list) {
+    std::stringstream ss(list);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (item.empty()) continue;
+        u64 limit = 100000;
+        bool result_x2 = false, count_only = false, backtrace = false;
+        if (const size_t at = item.find("!x2"); at != std::string::npos) result_x2 = true, item.erase(at, 3);
+        if (const size_t at = item.find("!count"); at != std::string::npos) count_only = true, item.erase(at, 6);
+        if (const size_t at = item.find("!bt"); at != std::string::npos) backtrace = true, item.erase(at, 3);
+        if (const size_t at = item.find('@'); at != std::string::npos) {
+            limit = std::strtoull(item.c_str() + at + 1, nullptr, 10);
+            item.resize(at);
+        }
+        if (item.rfind("site:", 0) == 0) {
+            auto s = std::make_unique<Site>();
+            s->ret = std::strtoull(item.c_str() + 5, nullptr, 16);
+            s->limit = limit;
+            Log("hle trace: the indirect call returning to %s: its targets (RT_HLE_TRACE)", Describe(s->ret).c_str());
+            g_sites.push_back(std::move(s));
+            continue;
+        }
+        auto* t = new Traced; // lives as long as the override
+        t->result_x2 = result_x2;
+        t->count_only = count_only;
+        t->backtrace = backtrace;
+        t->name = item;
+        t->limit = limit;
+        t->target = OverrideGuestFunction(item, TracedFn, t);
+        if (count_only) g_counted.push_back(t);
+        Log("hle trace: %s at %s: %s (RT_HLE_TRACE)", item.c_str(), Describe(t->target).c_str(),
+            backtrace ? "call chains counted" : count_only ? "calls counted" : "every call");
+    }
+    g_trace_sites = !g_sites.empty();
+}
+
 // --- RT_HLE_SELFTEST=1: the binding, the dispatch and CallGuest, without the game -----
 
 u64 TestSum(GuestContext*, u64 a, u32 b, s32 neg, u8 d, u64 e, u64 f, u64 g, u64 h, u64 on_stack, float x,
@@ -175,7 +336,13 @@ void SelfTest() {
 
 } // namespace
 
+double TraceSeconds() {
+    static const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
 void Init(const std::string& slots_path) {
+    TraceSeconds(); // (its zero: before guest code runs)
     g_mem.Map(kHostFnRegion, kHostFnRegionSize, 0, kMemInaccessible, "host functions");
     g_mem.Map(kHostScratchRegion, kHostScratchRegionSize, kRead | kWrite, kMemNormal, "host scratch");
     if (std::ifstream f(slots_path); f) {
@@ -190,6 +357,23 @@ void Init(const std::string& slots_path) {
     }
     if (const char* list = std::getenv("RT_HLE_PASSTHROUGH")) {
         InstallPassthroughs(list);
+    }
+    if (const char* list = std::getenv("RT_HLE_TRACE")) {
+        InstallTrace(list);
+    }
+}
+
+void NoteSite(GuestContext* c, u64 target) {
+    for (const auto& s : g_sites) {
+        if (s->ret != c->x[30]) continue;
+        std::lock_guard lock(s->mu);
+        const u64 n = ++s->targets[target];
+        if (s->lines < s->limit) {
+            ++s->lines;
+            Log("hle trace: t=%.4f site %s -> %s%s (0x%llx, 0x%llx, 0x%llx; %g)", TraceSeconds(), Describe(s->ret).c_str(),
+                Describe(target).c_str(), n == 1 ? " (new)" : "", (unsigned long long)c->x[0],
+                (unsigned long long)c->x[1], (unsigned long long)c->x[2], LowFloat(c->vreg[0][0]));
+        }
     }
 }
 
@@ -206,7 +390,8 @@ u64 RegisterHostFunction(const std::string& name, HostFn fn, void* user) {
 }
 
 u64 OverrideGuestFunction(const std::string& symbol, HostFn fn, void* user) {
-    const std::vector<u64> found = FindSymbol(symbol);
+    const std::vector<u64> found = symbol.rfind("0x", 0) == 0 ? std::vector<u64>{std::strtoull(symbol.c_str(), nullptr, 16)}
+                                                              : FindSymbol(symbol);
     if (found.size() != 1) {
         Fatal("hle: cannot override %s: %zu symbols.txt entries have that name", symbol.c_str(), found.size());
     }
