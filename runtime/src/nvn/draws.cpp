@@ -312,6 +312,25 @@ const char* WriterName(const WriteBack& w) {
     return "an unknown command";
 }
 
+/// Set while PageCopy fills whole pages: a pending counter report there makes the fill back off (NotYet), so the read
+/// is copied on its own and only reads that really cover a report reach Overlay's kCounter case below.
+thread_local bool t_page_fill = false;
+
+/// A draw or dispatch reading a counter report whose submission has not retired (its value is made on the CPU at
+/// retirement: queue.cpp): the read gets the bytes from before the report - in practice the previous report at that
+/// address, as the game's CPU last saw it. Brothership entering Bowser's island (a tester's log, 2026-11-06) stopped
+/// here; UE4 reads its reports on the CPU, so such a read most likely only spans the report. Logged, to find out.
+void NoteStaleCounterRead(const WriteBack& w, u64 address, u64 size, bool earlier) {
+    static std::atomic<u64> n{0};
+    const u64 k = n.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (k <= 20 || k % 10000 == 0) {
+        Log("nvn draw: read 0x%llx+0x%llx covers a counter report at 0x%llx not retired yet (%s): the bytes from before "
+            "it are used (#%llu)",
+            (unsigned long long)address, (unsigned long long)size, (unsigned long long)w.address,
+            earlier ? "an earlier submission" : "this submission", (unsigned long long)k);
+    }
+}
+
 /// Lays the writes of `list` over `out` (guest memory [address, address + size)), in command order. A GPU
 /// write (kRing) becomes a GpuPart; a CPU-known write over a GpuPart is uploaded and becomes one too.
 /// Returns whether a GpuPart came from `list`'s ring.
@@ -360,7 +379,10 @@ bool Overlay(Translator& t, const std::vector<WriteBack>& list, u64 address, u64
             std::memcpy(out + (lo - address), &v, 4);
             break;
         }
-        case WriteBack::Kind::kCounter: throw NotYet("a GPU read of a counter report its writer has not retired yet");
+        case WriteBack::Kind::kCounter: // `out` keeps what was there before the report (NoteStaleCounterRead)
+            if (t_page_fill) throw NotYet("a page holding a counter report not retired yet");
+            NoteStaleCounterRead(w, address, size, earlier);
+            break;
         case WriteBack::Kind::kRing: break;
         }
         if (over_gpu) { // the bytes this write leaves (independent of what was there), after the GPU part
@@ -1058,6 +1080,10 @@ bool PageCopy(Translator& t, u64 address, u64 size, u64 need, u64 min_offset, Up
         const UploadRing::Slice part{span->slice.buffer, span->slice.offset + (pg - span_lo),
                                      span->slice.data ? span->slice.data + (pg - span_lo) : nullptr};
         try {
+            struct PageFill {
+                PageFill() { t_page_fill = true; }
+                ~PageFill() { t_page_fill = false; }
+            } page_fill;
             FillAsGpuSees(t, pg, end - pg, part);
         } catch (const NotYet&) { // those pages stay unfilled (nothing read them yet): the read is copied on its own
             if (ProfileDraws()) g_profile.page_fallback.fetch_add(1, std::memory_order_relaxed);

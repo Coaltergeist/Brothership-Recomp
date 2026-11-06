@@ -54,13 +54,31 @@ void Choose(int window_height_px) {
         }
         if (!pick) Fatal("resolution: RT_RES=%s (360p|540p|720p|1080p|1440p|2160p|auto)", e);
     }
-    g_scale = Make(*pick);
+    // A factor over 1 that is not a whole number (1080p's 1.5x) is drawn at the next whole one and the window's
+    // blit shrinks it (display.cpp): at 1.5x one game pixel is 1.5 pixels, so the game's own one-pixel steps (fetch
+    // offsets: +1 -> +1 but -1 -> -2; sizes from its constant buffers, which the rescaling pass never sees) land
+    // between pixels - smeared textures and ragged outlines (a tester's 1080p shots, 2026-11-06; headless plaza
+    // captures against 4K box-filtered to 1080p: 1.5x differs 5.0 per pixel, 2x shrunk 1.75). RT_RES_EXACT=1: as
+    // named (A/B). Factors under 1 (540p) stay: they are for speed.
+    Choice drawn = *pick;
+    const char* exact = std::getenv("RT_RES_EXACT");
+    const bool whole = drawn.up_scale % (1u << drawn.down_shift) == 0;
+    const bool over_one = drawn.up_scale > (1u << drawn.down_shift);
+    if (!whole && over_one && !(exact && *exact && *exact != '0')) {
+        drawn.up_scale = (drawn.up_scale + (1u << drawn.down_shift) - 1) >> drawn.down_shift, drawn.down_shift = 0;
+    }
+    g_scale = Make(drawn);
     // RT_DOCKED's game renders 1600x900: the factors are for handheld's 720p
     if (ReportDocked() && g_scale.Scaled()) Fatal("resolution: RT_RES=%s with RT_DOCKED (factors are on 720p)", name);
     char window[48] = "no window";
     if (window_height_px) std::snprintf(window, sizeof window, "window %d pixels high", window_height_px);
-    Log("resolution: internal %ux%u (%gx the game's 1280x720; RT_RES=%s, %s)%s", g_scale.width, g_scale.height,
-        g_scale.factor, e ? e : "unset", window, g_scale.Scaled() ? "; the NVN layer scales (RT_GPU=nvn)" : "");
+    char shrunk[96] = "";
+    if (drawn.up_scale != pick->up_scale) {
+        std::snprintf(shrunk, sizeof shrunk, ", %s drawn at %ux and shrunk to the window (RT_RES_EXACT=1: %s as named)",
+                      pick->name, drawn.up_scale, pick->name);
+    }
+    Log("resolution: internal %ux%u (%gx the game's 1280x720; RT_RES=%s, %s%s)%s", g_scale.width, g_scale.height,
+        g_scale.factor, e ? e : "unset", window, shrunk, g_scale.Scaled() ? "; the NVN layer scales (RT_GPU=nvn)" : "");
 }
 
 const Scale& Get() {

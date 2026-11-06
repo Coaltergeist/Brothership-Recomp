@@ -5,6 +5,7 @@
 // form drippu's rescaling pass takes): 0.5, 0.75, 1, 1.5, 2, 3. auto follows the window: the largest of 720p,
 // 1080p and 1440p that fits its pixel height (the Steam Deck's 1280x800: 720p; headless: 720p) - 4K and the
 // factors under 1 only when named. Unset: 720p. The NVN layer scales (images.cpp ScalesWith).
+// 1080p's 1.5x is drawn at 2x and shrunk by the window's blit (resolution.cpp; RT_RES_EXACT=1: 1.5x).
 #pragma once
 
 #include "rt.h"
