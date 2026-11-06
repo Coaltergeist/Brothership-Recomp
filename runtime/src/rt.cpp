@@ -14,6 +14,7 @@
 #include "platform/platform.h"
 #include "services.h"
 #include "threads.h"
+#include "resolution.h"
 #include "window.h"
 #include "writetrack.h"
 
@@ -1112,12 +1113,12 @@ int main(int argc, char** argv) {
     };
     const bool caches_named = have_npdm();
     diag::Start();
-    options::LogAll();
+    options::LogAll("at start");
     window::Open(); // early: a missing display fails before the image loads
     if (ui::Wanted(argc, argv)) { // the start screen: returns on Play, with the settings it saved
         ui::Run(player ? build::BuiltMods() : BuiltMods(), player, after_seed);
         window::Reapply();
-        options::LogAll();
+        options::LogAll("chosen on the start screen");
         // A first install: the start screen ran before the game files existed, so the NVN layer opened caches with no
         // program id - the seed's went unused for the whole session (2026-11-01, a first install's first play). Start again
         // straight into the game (--play), which opens the seeded ones.
@@ -1131,6 +1132,7 @@ int main(int argc, char** argv) {
             }
         }
     }
+    resolution::LogChoice(); // after the start screen: the resolution the game is drawn at
     std::string image_path = player ? "" : args[0];
     if (player) {
         const build::Paths paths = build::Where();

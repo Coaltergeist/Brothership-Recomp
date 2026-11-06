@@ -72,6 +72,9 @@ struct TextureState {
     u64 address; // GPU address (= guest address) of its storage
 };
 
+/// The storage addresses of the game's initialised NVNtextures, sorted (LogImageCache).
+std::vector<u64> LiveTextureAddresses();
+
 /// The state of the game's initialised NVNtexture at `texture`.
 TextureState TextureStateOf(u64 texture);
 

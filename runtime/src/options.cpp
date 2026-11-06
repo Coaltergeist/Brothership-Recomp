@@ -190,7 +190,7 @@ std::string SettingsPath() {
     return (std::filesystem::path(UserDir()) / "settings.ini").string();
 }
 
-void LogAll() {
+void LogAll(const char* when) {
     std::string line;
     for (const Option& o : All()) {
         const char* v = Get(o.name);
@@ -198,7 +198,7 @@ void LogAll() {
         line += std::string(line.empty() ? "" : ", ") + o.name + "=" + (v ? v : std::string("(") + o.fallback + ")");
         if (std::strcmp(from, "settings") == 0) line += " [settings]";
     }
-    Log("options: %s (settings file %s%s)", line.c_str(), SettingsPath().c_str(),
+    Log("options%s%s%s: %s (settings file %s%s)", when ? " (" : "", when ? when : "", when ? ")" : "", line.c_str(), SettingsPath().c_str(),
         TestRun() && !std::getenv("RT_SETTINGS") ? ": not read, a test run" : "");
 }
 

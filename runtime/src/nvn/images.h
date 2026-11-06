@@ -43,7 +43,16 @@ struct TextureImage {
     };
     std::map<std::array<u32, 3>, Attachment> attachments; // by (level, base layer, layers)
     std::map<std::array<u32, 7>, Vulkan::vk::ImageView> sampled; // SampledView, by its parameters
+    u64 bytes = 0;        // the driver's memory size for it (LogImageCache)
+    u32 last_use_s = 0;   // Uptime() of its last ImageFor, in seconds (with images.cpp's lock)
 };
+
+/// Drops the images whose storage starts in [lo, hi) (memory.cpp: a finalised memory pool; images.cpp EvictImages).
+void DropImagesIn(u64 lo, u64 hi);
+
+/// Logs the image cache's size: all images, those idle for a while, those whose storage is in no memory pool any
+/// more or has no live NVNtexture (2026-11-06: a tester's GPU ran out of memory after 83 min; nothing left the cache).
+void LogImageCache();
 
 /// The run's factor x 4 (resolution.h: 2, 3, 4, 6, 8, 12); 4 at 720p.
 u32 ScaleN();

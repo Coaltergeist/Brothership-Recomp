@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "services.h"
 #include "options.h"
@@ -27,6 +28,7 @@ constexpr std::array<Choice, 6> kChoices{{
 constexpr u32 kAutoMaxLines = 1440; // auto never picks 4K (experimental) or under 720p
 
 Scale g_scale;
+std::string g_line; // Choose's choice, logged by LogChoice
 
 Scale Make(const Choice& c) {
     Scale s;
@@ -77,8 +79,15 @@ void Choose(int window_height_px) {
         std::snprintf(shrunk, sizeof shrunk, ", %s drawn at %ux and shrunk to the window (RT_RES_EXACT=1: %s as named)",
                       pick->name, drawn.up_scale, pick->name);
     }
-    Log("resolution: internal %ux%u (%gx the game's 1280x720; RT_RES=%s, %s%s)%s", g_scale.width, g_scale.height,
-        g_scale.factor, e ? e : "unset", window, shrunk, g_scale.Scaled() ? "; the NVN layer scales (RT_GPU=nvn)" : "");
+    char line[512];
+    std::snprintf(line, sizeof line, "resolution: internal %ux%u (%gx the game's 1280x720; RT_RES=%s, %s%s)%s",
+                  g_scale.width, g_scale.height, g_scale.factor, e ? e : "unset", window, shrunk,
+                  g_scale.Scaled() ? "; the NVN layer scales (RT_GPU=nvn)" : "");
+    g_line = line;
+}
+
+void LogChoice() {
+    if (!g_line.empty()) Log("%s", g_line.c_str());
 }
 
 const Scale& Get() {

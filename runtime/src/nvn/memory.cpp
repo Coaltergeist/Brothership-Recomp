@@ -8,6 +8,7 @@
 // (copies at submit, written back on completion) is Phase 5's.
 // Virtual pools (MemoryPoolMapVirtual) are not implemented: no game so far
 // uses them.
+#include "images.h"
 #include "nvn.h"
 
 #include "../threads.h"
@@ -129,6 +130,7 @@ NVN_PROC(nvnMemoryPoolFinalize, void, u64 pool) {
         std::unique_lock lock(g_pools_mu);
         g_pools.erase(p->storage);
     }
+    DropImagesIn(p->storage, p->storage + p->size); // its memory is gone (images.cpp EvictImages)
     Destroy<MemoryPool>(pool);
 }
 NVN_PROC(nvnMemoryPoolSetDebugLabel, void, u64 pool, u64 label) { Get<MemoryPool>(pool); }

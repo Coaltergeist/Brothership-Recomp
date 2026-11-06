@@ -18,6 +18,7 @@
 // masks), layered clears beyond the view's layers.
 #include "pipeline.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -479,6 +480,11 @@ TargetSet BindTargets(Translator& t) {
     std::vector<u64> key{reinterpret_cast<u64>(out.pass), layers};
     for (VkImageView v : views) key.push_back(reinterpret_cast<u64>(v));
     std::lock_guard lock(g_targets_mu);
+    if (g_framebuffers.size() >= 4096) { // entries whose images are gone (images.cpp drops images; their views went too)
+        std::erase_if(g_framebuffers, [](const auto& e) {
+            return std::any_of(e.second.images.begin(), e.second.images.end(), [](const auto& w) { return w.expired(); });
+        });
+    }
     Framebuffer& fb = g_framebuffers[key];
     bool stale = !fb.framebuffer;
     for (const auto& w : fb.images) stale |= w.expired();

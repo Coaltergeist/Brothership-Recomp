@@ -373,6 +373,10 @@ NVN_PROC(nvnQueuePresentTexture, void, u64 queue, u64 window, s32 index) {
         }
     }
     perf::OnPresent();
+    { // the image cache's size once a minute (LogImageCache)
+        static double next_images = 60;
+        if (Uptime() >= next_images) next_images = Uptime() + 60, LogImageCache();
+    }
     TraceWaitsPresent(frame);
     const u64 shown = w->textures[static_cast<size_t>(index)];
     // F9: draws translated after this present belong to the next frame; log and capture three such frames

@@ -438,6 +438,17 @@ std::atomic<u64> g_texture_ids{0};
 
 TextureState TextureStateOf(u64 texture) { return Get<Texture>(texture)->state; }
 
+std::vector<u64> LiveTextureAddresses() {
+    std::vector<u64> out;
+    {
+        std::lock_guard lock(g_textures_mu);
+        out.reserve(g_textures.size());
+        for (const auto& [obj, t] : g_textures) out.push_back(t->state.address);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 NVN_PROC(nvnTextureInitialize, bool, u64 texture, u64 builder) {
     const auto b = Load<TextureBuilder>(builder);
     if (b.gl_name) Fatal("nvn: textures from GL texture names are not supported");

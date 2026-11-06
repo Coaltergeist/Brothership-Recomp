@@ -124,6 +124,40 @@ constexpr u32 kTarget1D = 0, kTarget2D = 1, kTarget3D = 2, kTarget1DArray = 3, k
 std::mutex g_images_mu;
 std::map<u64, std::shared_ptr<TextureImage>> g_images; // by storage address
 
+// Images the hardware would have lost (2026-11-06: a tester's 2 GB GPU ran out of memory after 83 min; ~900 MB were
+// held by the time the plaza was reached, nothing ever left): an image whose storage a newer image's overlaps (on the
+// console that texture's data overwrites it) and the images of a finalised memory pool (its memory is gone). Not at
+// nvnTextureFinalize (LASRecomp's point): draws find textures through texture pool entries, which outlive the
+// NVNtexture. In-flight submissions keep theirs (Translator::keep). RT_NVN_KEEP_IMAGES=1: keep all (A/B).
+bool EvictImages() {
+    static const bool on = [] {
+        const char* e = std::getenv("RT_NVN_KEEP_IMAGES");
+        return !(e && *e && *e != '0');
+    }();
+    return on;
+}
+u64 g_max_storage = 0; // the largest image storage made (with g_images_mu): how far back an overlap can start
+struct Dropped {
+    u64 n = 0, bytes = 0;
+};
+Dropped g_dropped_overlap, g_dropped_pool; // with g_images_mu
+
+/// Drops the images other than the one at `address` whose storage overlaps [address, address + size) (g_images_mu).
+void DropOverlapsLocked(u64 address, u64 size) {
+    g_max_storage = std::max(g_max_storage, size);
+    const u64 hi = address + size;
+    auto it = g_images.lower_bound(address > g_max_storage ? address - g_max_storage : 0);
+    while (it != g_images.end() && it->first < hi) {
+        const auto& img = it->second;
+        if (it->first != address && img && it->first + img->state.storage.size > address) {
+            ++g_dropped_overlap.n, g_dropped_overlap.bytes += img->bytes;
+            it = g_images.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 bool SameSettings(const TextureBuilder& a, const TextureBuilder& b) {
     return a.target == b.target && a.width == b.width && a.height == b.height && a.depth == b.depth &&
            a.levels == b.levels && a.format == b.format && a.flags == b.flags && a.samples == b.samples;
@@ -242,6 +276,7 @@ std::shared_ptr<TextureImage> MakeImage(const TextureState& t, bool may_scale = 
         .pQueueFamilyIndices = nullptr,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     });
+    img->bytes = Vk().device->GetLogical().GetImageMemoryRequirements(*img->image).size;
     return img;
 }
 
@@ -404,9 +439,63 @@ void BlitArea(const Vulkan::vk::CommandBuffer& cmd, const TextureImage& s, const
 std::shared_ptr<TextureImage> ImageFor(const TextureState& t, const Vulkan::vk::CommandBuffer& cmd) {
     std::lock_guard lock(g_images_mu);
     auto& slot = g_images[t.address];
-    if (!slot || !SameSettings(slot->state.settings, t.settings)) slot = MakeImage(t);
+    if (!slot || !SameSettings(slot->state.settings, t.settings)) {
+        slot = MakeImage(t);
+        if (EvictImages()) DropOverlapsLocked(t.address, t.storage.size);
+    }
+    slot->last_use_s = static_cast<u32>(Uptime());
     Initialise(*slot, cmd);
     return slot;
+}
+
+void DropImagesIn(u64 lo, u64 hi) {
+    if (!EvictImages()) return;
+    std::lock_guard lock(g_images_mu);
+    for (auto it = g_images.lower_bound(lo); it != g_images.end() && it->first < hi;) {
+        if (it->second) ++g_dropped_pool.n, g_dropped_pool.bytes += it->second->bytes;
+        it = g_images.erase(it);
+    }
+}
+
+void LogImageCache() {
+    struct Entry {
+        u64 address, bytes;
+        u32 last_use_s;
+        bool scaled;
+    };
+    std::vector<Entry> entries;
+    Dropped overlap, pool;
+    {
+        std::lock_guard lock(g_images_mu);
+        overlap = g_dropped_overlap, pool = g_dropped_pool;
+        entries.reserve(g_images.size());
+        for (const auto& [address, img] : g_images) {
+            if (img) entries.push_back({address, img->bytes, img->last_use_s, img->Scaled()});
+        }
+    }
+    const std::vector<u64> live = LiveTextureAddresses();
+    const u32 now = static_cast<u32>(Uptime());
+    struct Sum {
+        u64 n = 0, bytes = 0;
+        void Add(const Entry& e) { ++n, bytes += e.bytes; }
+    } all, scaled, idle1, idle5, no_pool, no_texture;
+    for (const Entry& e : entries) {
+        all.Add(e);
+        if (e.scaled) scaled.Add(e);
+        if (now - e.last_use_s >= 60) idle1.Add(e);
+        if (now - e.last_use_s >= 300) idle5.Add(e);
+        if (!FindPool(e.address).pool) no_pool.Add(e);
+        if (!std::binary_search(live.begin(), live.end(), e.address)) no_texture.Add(e);
+    }
+    const auto mb = [](const Sum& s) { return static_cast<double>(s.bytes) / (1024.0 * 1024.0); };
+    Log("nvn images: %llu held, %.0f MB (scaled %llu, %.0f MB); unused for 1 min %llu, %.0f MB, for 5 min %llu, "
+        "%.0f MB; in no memory pool %llu, %.0f MB; no live NVNtexture at their address %llu, %.0f MB (%zu textures); "
+        "dropped so far: overlapped by a newer image %llu, %.0f MB, in finalised pools %llu, %.0f MB%s",
+        (unsigned long long)all.n, mb(all), (unsigned long long)scaled.n, mb(scaled), (unsigned long long)idle1.n,
+        mb(idle1), (unsigned long long)idle5.n, mb(idle5), (unsigned long long)no_pool.n, mb(no_pool),
+        (unsigned long long)no_texture.n, mb(no_texture), live.size(), (unsigned long long)overlap.n,
+        static_cast<double>(overlap.bytes) / (1024.0 * 1024.0), (unsigned long long)pool.n,
+        static_cast<double>(pool.bytes) / (1024.0 * 1024.0), EvictImages() ? "" : " (RT_NVN_KEEP_IMAGES=1)");
 }
 
 namespace {

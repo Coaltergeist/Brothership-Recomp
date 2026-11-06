@@ -53,6 +53,7 @@ std::string SettingsPath();
 
 /// Logs every player option's value, or its default in parentheses, and its source when not the default, in one
 /// line.
-void LogAll();
+/// `when`: a label ("at start", "chosen on the start screen"), or none.
+void LogAll(const char* when = nullptr);
 
 } // namespace rt::options

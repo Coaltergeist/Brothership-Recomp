@@ -19,9 +19,13 @@ struct Scale {
     bool Scaled() const { return up_scale != 1 || down_shift != 0; }
 };
 
-/// Chooses the run's scale from RT_RES and the window's height in pixels (0: no window). window::Open calls it
-/// once; stops the run for an unknown value.
+/// Chooses the run's scale from RT_RES and the window's height in pixels (0: no window). window::Open and
+/// window::Reapply (after the start screen) call it; stops the run for an unknown value.
 void Choose(int window_height_px);
+
+/// Logs the last choice. rt.cpp calls it once the start screen (which may change RT_RES and the window) is done: a
+/// line from before it named a resolution the game never used and read as a bug (a tester's 1.4 log, 2026-11-06).
+void LogChoice();
 
 /// The run's scale (720p if Choose was not called: tools, tests).
 const Scale& Get();
