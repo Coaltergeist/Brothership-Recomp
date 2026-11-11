@@ -1,0 +1,146 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "repo": "Coaltergeist/Brothership-Recomp",
+  "name": "Brothership Recomp",
+  "inputs": [
+    {
+      "id": "game",
+      "label": "Your Mario & Luigi: Brothership dump, version 1.0.1: the folder with the base game and the update (.nsp files), or an unpacked dump (exefs and romfs).",
+      "role": "game",
+      "formats": [{ "type": "folder", "requires": ["keys"] }]
+    },
+    {
+      "id": "keys",
+      "label": "Your Nintendo Switch prod.keys",
+      "role": "key",
+      "shared": "switch.prod-keys"
+    }
+  ],
+  "prepare": {
+    "program": ["BrothershipRecomp.exe", "BrothershipRecomp-x86_64.AppImage"],
+    "args": ["--prepare", "--game", "{input:game}", "--keys", "{input:keys}"],
+    "label": "Building the game from your files (about 10-15 minutes, longer on a Steam Deck)",
+    "timeout": 7200
+  },
+  "start": {
+    "program": ["BrothershipRecomp.exe", "BrothershipRecomp-x86_64.AppImage"],
+    "args": ["--play", "--game", "{input:game}"],
+    "env": { "RT_SETTINGS": "{install}/settings.ini" }
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "ini",
+      "file": [{ "path": "{install}/settings.ini" }]
+    }
+  ],
+  "saves": ["{local}/brothership-recomp/save", "{config}/brothership-recomp/save"],
+  "folders": {
+    "logs": [
+      { "path": "{local}/brothership-recomp", "if": "{local}/brothership-recomp/nxrt.log" },
+      { "path": "{config}/brothership-recomp" }
+    ]
+  },
+  "settings": [
+    {
+      "id": "resolution",
+      "label": "Resolution",
+      "help": "What the game draws at. Higher is sharper and needs a faster graphics card. Auto follows the window's height.",
+      "choices": [
+        { "label": "Auto", "set": { "RT_RES": "auto" } },
+        { "label": "720p", "set": { "RT_RES": "720p" } },
+        { "label": "1080p", "set": { "RT_RES": "1080p" } },
+        { "label": "1440p", "set": { "RT_RES": "1440p" } },
+        { "label": "4K", "set": { "RT_RES": "2160p" } }
+      ],
+      "defaults": { "RT_RES": "720p" }
+    },
+    {
+      "id": "antialiasing",
+      "label": "Anti-aliasing",
+      "help": "SMAA smooths jagged edges. It costs a little speed.",
+      "choices": [
+        { "label": "Off", "set": { "RT_AA": "off" } },
+        { "label": "SMAA", "set": { "RT_AA": "smaa" } }
+      ],
+      "defaults": { "RT_AA": "off" }
+    },
+    {
+      "id": "frame_rate",
+      "label": "Frame rate",
+      "help": "30 is the game's own. 60 and Uncapped switch on the built-in 60 fps patch.",
+      "choices": [
+        { "label": "30", "set": { "RT_FPS": "30" } },
+        { "label": "60", "set": { "RT_FPS": "60" } },
+        { "label": "Uncapped", "set": { "RT_FPS": "uncapped" } }
+      ],
+      "defaults": { "RT_FPS": "30" }
+    },
+    {
+      "id": "vsync",
+      "label": "VSync",
+      "help": "Waits for the screen's refresh so the picture doesn't tear. Off can feel more responsive.",
+      "choices": [
+        { "label": "On", "set": { "RT_VSYNC": "on" } },
+        { "label": "Off", "set": { "RT_VSYNC": "off" } }
+      ],
+      "defaults": { "RT_VSYNC": "on" }
+    },
+    {
+      "id": "window",
+      "label": "Window",
+      "help": "Windowed uses Window size. Borderless fills the screen.",
+      "choices": [
+        { "label": "Windowed", "set": { "RT_WINDOW": "windowed" } },
+        { "label": "Borderless", "set": { "RT_WINDOW": "borderless" } }
+      ],
+      "defaults": { "RT_WINDOW": "windowed" }
+    },
+    {
+      "id": "window_size",
+      "label": "Window size",
+      "help": "The size of the game's window in Windowed mode.",
+      "choices": [
+        { "label": "1280 x 720", "set": { "RT_WINDOW_SIZE": "1280x720" } },
+        { "label": "1600 x 900", "set": { "RT_WINDOW_SIZE": "1600x900" } },
+        { "label": "1920 x 1080", "set": { "RT_WINDOW_SIZE": "1920x1080" } },
+        { "label": "2560 x 1440", "set": { "RT_WINDOW_SIZE": "2560x1440" } }
+      ],
+      "defaults": { "RT_WINDOW_SIZE": "1280x720", "RT_WINDOW": "windowed" },
+      "when": { "RT_WINDOW": "windowed" }
+    },
+    {
+      "id": "buttons",
+      "label": "Button layout",
+      "help": "Switch positions keeps the Switch's button places. Controller labels matches the letters on your controller.",
+      "choices": [
+        { "label": "Switch positions", "set": { "RT_BUTTONS": "positions" } },
+        { "label": "Controller labels", "set": { "RT_BUTTONS": "labels" } }
+      ],
+      "defaults": { "RT_BUTTONS": "positions" }
+    },
+    {
+      "id": "language",
+      "label": "Language",
+      "help": "The language the game uses.",
+      "choices": [
+        { "label": "English (US)", "set": { "RT_LANGUAGE": "en-US" } },
+        { "label": "English (UK)", "set": { "RT_LANGUAGE": "en-GB" } },
+        { "label": "French", "set": { "RT_LANGUAGE": "fr" } },
+        { "label": "French (Canada)", "set": { "RT_LANGUAGE": "fr-CA" } },
+        { "label": "German", "set": { "RT_LANGUAGE": "de" } },
+        { "label": "Italian", "set": { "RT_LANGUAGE": "it" } },
+        { "label": "Spanish", "set": { "RT_LANGUAGE": "es" } },
+        { "label": "Spanish (Latin America)", "set": { "RT_LANGUAGE": "es-419" } },
+        { "label": "Dutch", "set": { "RT_LANGUAGE": "nl" } },
+        { "label": "Portuguese (Brazil)", "set": { "RT_LANGUAGE": "pt-BR" } },
+        { "label": "Japanese", "set": { "RT_LANGUAGE": "ja" } },
+        { "label": "Korean", "set": { "RT_LANGUAGE": "ko" } },
+        { "label": "Chinese (Simplified)", "set": { "RT_LANGUAGE": "zh-Hans" } },
+        { "label": "Chinese (Traditional)", "set": { "RT_LANGUAGE": "zh-Hant" } }
+      ],
+      "defaults": { "RT_LANGUAGE": "en-US" }
+    }
+  ]
+}
