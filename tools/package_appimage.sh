@@ -58,6 +58,7 @@ echo "staged: $(du -sh "$S" | cut -f1)"
 rm -rf "$D"
 (cd "$S" && BUILD_DIR="$F/obj" sh linux/build.sh "$D/usr" "$JOBS") > "$F/build.log" 2>&1 || { tail -30 "$F/build.log"; exit 1; }
 install -m755 "$S/linux/AppRun" "$D/AppRun"
+cp "$REPO/recomplauncher.json" "$D/recomplauncher.json" # (RecompLauncher reads it from the AppImage's top folder)
 cp "$S/linux/$ID.desktop" "$D/$ID.desktop"
 cp "$S/linux/$ID.svg" "$D/$ID.svg"
 ln -s "$ID.svg" "$D/.DirIcon"
@@ -100,7 +101,7 @@ mksquashfs "$D" "$F/AppDir.squashfs" -root-owned -noappend -comp zstd -Xcompress
 cat "$RUNTIME" "$F/AppDir.squashfs" > "$OUT"
 chmod 755 "$OUT"
 # the download: the AppImage with the readme and licences, in one folder as the Windows zip
-python3 -I - "$OUT" "$REPO/dist/BrothershipRecomp-Linux.zip" "$P/README_LINUX.txt" "$P/LICENSE" "$P/NOTICE.md" <<'EOF2'
+python3 -I - "$OUT" "$REPO/dist/BrothershipRecomp-Linux.zip" "$P/README_LINUX.txt" "$P/LICENSE" "$P/NOTICE.md" "$REPO/recomplauncher.json" <<'EOF2'
 import os, sys, zipfile
 app, out, readme, *rest = sys.argv[1:]
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:

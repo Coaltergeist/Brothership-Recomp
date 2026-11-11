@@ -9,6 +9,7 @@
 #                       module's sources, the 60 fps patch, LLVM's licence)
 #   LICENSE, NOTICE.md  public/ (GPL-3.0-or-later; every library and the 60 fps patch credited)
 #   README.txt          for testers (public/README_WINDOWS.txt)
+#   recomplauncher.json how RecompLauncher sets the game up and starts it (the repository's own copy)
 # Nothing of the game and no key: the archive is scanned for game file types and key-like hex before it is written.
 #
 # Usage: tools/package_windows.sh [jobs]   (jobs for the runtime's build, default 8: the heat rule)
@@ -40,6 +41,7 @@ cp "$B/nxrt.exe" "$STAGE/BrothershipRecomp.exe"
 rm -f "$STAGE/headers.txt"
 cp "$REPO/public/LICENSE" "$REPO/public/NOTICE.md" "$STAGE/"
 cp "$REPO/public/README_WINDOWS.txt" "$STAGE/README.txt"
+cp "$REPO/recomplauncher.json" "$STAGE/" # (how RecompLauncher sets the game up, starts it and shows its settings)
 # the scan: no game files, no key-like hex in text files
 bad=$(find "$STAGE" -type f \( -iname '*.nsp' -o -iname '*.xci' -o -iname '*.nca' -o -iname '*.nso' -o -iname '*.npdm' \
       -o -iname '*.keys' -o -iname '*.utoc' -o -iname '*.ucas' -o -iname '*.pak' -o -iname 'image.bin' \) )

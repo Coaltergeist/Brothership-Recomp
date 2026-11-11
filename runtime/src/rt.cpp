@@ -1005,6 +1005,25 @@ static void GameEnv(bool own_romfs, bool own_npdm) {
     }
 }
 
+/// `--game <path>` or `--game=<path>` (and `--keys`): the player's files for this run only, as RT_GAME_DIR and RT_KEYS, so
+/// a launcher can pass them in. A flag that is not given changes nothing: the settings file and the start screen
+/// stay as they were. Advances `i` past a separate value; false when argv[i] is not this flag.
+static bool TakePathOption(int argc, char** argv, int& i, const char* flag, const char* env) {
+    const size_t length = std::strlen(flag);
+    if (std::strncmp(argv[i], flag, length) != 0) return false;
+    const char* rest = argv[i] + length;
+    const bool joined = *rest == '=';
+    if (!joined && *rest != '\0') return false; // (another flag that starts the same)
+    if (!joined && i + 1 >= argc) Fatal("%s needs a path", flag);
+    const char* path = joined ? rest + 1 : argv[++i];
+#ifdef _WIN32
+    _putenv_s(env, path);
+#else
+    setenv(env, path, 1);
+#endif
+    return true;
+}
+
 int main(int argc, char** argv) {
     // A build without a console window started by a double-click, or on Linux from a desktop menu or a
     // Flatpak (output to the journal): the log to the per-user folder (added
@@ -1017,7 +1036,7 @@ int main(int argc, char** argv) {
     // the positional ones; --play: no start screen (ui/start.h); --build: build the game module and end (build.h);
     // --seed: Build's shader steps in a run of their own, then the start screen again with --after-seed (ui/seed.h)
     std::vector<const char*> args;
-    bool build_only = false, seed_only = false, after_seed = false;
+    bool build_only = false, seed_only = false, after_seed = false, prepare = false;
     // --extract-shaders <romfs> <out>: the game's shader stages for the seed (seed/extract.h), then end
     if (argc == 4 && std::strcmp(argv[1], "--extract-shaders") == 0) {
         std::atomic<bool> cancel{false};
@@ -1041,6 +1060,9 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--build") == 0) build_only = true;
+        else if (std::strcmp(argv[i], "--prepare") == 0) build_only = prepare = true; // --build, with progress lines for a launcher
+        else if (TakePathOption(argc, argv, i, "--game", "RT_GAME_DIR")) continue;
+        else if (TakePathOption(argc, argv, i, "--keys", "RT_KEYS")) continue;
         else if (std::strcmp(argv[i], "--seed") == 0) seed_only = true;
         else if (std::strcmp(argv[i], "--after-seed") == 0) after_seed = true;
         else if (std::strcmp(argv[i], "--play") != 0) args.push_back(argv[i]);
@@ -1049,7 +1071,7 @@ int main(int argc, char** argv) {
     // A player start: no image named, so the game files and the build folder come from the settings (build.h), the
     // module is loaded once Play is chosen (a rebuild on the start screen can still replace it)
     const bool player = args.empty();
-    if (build_only) return build::Command();
+    if (build_only) return build::Command(prepare);
     if (seed_only) return ui::RunSeed();
 #else
     const bool player = false;
