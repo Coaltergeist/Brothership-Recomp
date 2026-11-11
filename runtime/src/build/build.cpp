@@ -940,7 +940,7 @@ std::string MinSec(double secs) {
 }
 } // namespace
 
-int Command() {
+int Command(bool launcher) {
     std::signal(SIGINT, [](int) { g_cancel = true; }); // Ctrl+C: Cancel (only the flag: safe in a handler)
     std::string why;
     const Paths p = Where();
@@ -971,6 +971,10 @@ int Command() {
             if (s.stage == Stage::kSeed && s.total) line += "  " + std::to_string(s.done) + "/" + std::to_string(s.total) + " shaders";
             if (!end && s.remaining >= 0) line += "  about " + MinSec(s.remaining) + " left";
             std::printf("%s\n", line.c_str());
+            // (no estimate yet: 0, which a launcher shows as the start)
+            const bool estimated = s.remaining >= 0 && s.elapsed + s.remaining > 0;
+            const double fraction = estimated ? s.elapsed / (s.elapsed + s.remaining) : 0.0;
+            if (launcher && !end) std::printf("progress %.2f %s\n", fraction, s.step.c_str());
             std::fflush(stdout);
             shown = s.stage, last = now;
         }
