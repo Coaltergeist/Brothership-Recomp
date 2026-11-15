@@ -89,6 +89,16 @@ endif()
 file(GLOB RT_SERVICES "${CMAKE_CURRENT_SOURCE_DIR}/src/services/*.cpp")
 find_package(Threads REQUIRED)
 
+# Source paths the programs keep (asserts' __FILE__ in drippu, boost and the runtime; debug info): relative to the
+# repository, not the build machine's folder (which named its user; found in the 1.0 release's audit, 2026-11-15).
+# Here, before the subdirectories, so drippu (gpu/), SDL and boost get it too.
+get_filename_component(RT_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." REALPATH)
+if (MSVC) # (clang-cl: the clang option through /clang:)
+    add_compile_options("/clang:-ffile-prefix-map=${RT_REPO_ROOT}/=")
+else()
+    add_compile_options("-ffile-prefix-map=${RT_REPO_ROOT}/=")
+endif()
+
 # Windows: what drippu's build defines there, for the runtime too (windows.h reaches it
 # through drippu's Vulkan headers: no min/max macros, no rarely used headers).
 if (WIN32)
@@ -146,7 +156,7 @@ else()
     target_compile_options(ooz PRIVATE -w -fno-strict-aliasing -O1)
 endif()
 
-add_executable(nxrt src/rt.cpp src/game/load.cpp src/build/build.cpp src/build/unpack.cpp src/seed/extract.cpp src/ui/start.cpp src/ui/seed.cpp src/writetrack.cpp src/svc.cpp src/threads.cpp src/kernel.cpp src/ipc.cpp src/capture.cpp src/gpu.cpp src/audio.cpp src/npdm.cpp src/perf.cpp src/diag.cpp src/window.cpp src/options.cpp src/mods.cpp src/resolution.cpp src/input.cpp src/fpx_probe.cpp src/overlay.cpp src/hle.cpp src/sequencer_fix.cpp src/nvn/tap.cpp
+add_executable(nxrt src/rt.cpp src/game/load.cpp src/build/build.cpp src/build/unpack.cpp src/seed/extract.cpp src/ui/start.cpp src/ui/seed.cpp src/writetrack.cpp src/svc.cpp src/threads.cpp src/kernel.cpp src/ipc.cpp src/capture.cpp src/gpu.cpp src/audio.cpp src/npdm.cpp src/perf.cpp src/diag.cpp src/window.cpp src/options.cpp src/mods.cpp src/resolution.cpp src/input.cpp src/fpx_probe.cpp src/overlay.cpp src/hle.cpp src/sequencer_fix.cpp src/bt_pacing.cpp src/snaptor_fix.cpp src/cvars.cpp src/speedup.cpp src/bp_trace.cpp src/nvn/tap.cpp
                     src/nvn/layer.cpp src/nvn/device.cpp src/nvn/state.cpp src/nvn/memory.cpp src/nvn/cmdbuf.cpp src/nvn/commands.cpp src/nvn/sampler.cpp src/nvn/texture.cpp src/nvn/program.cpp src/nvn/images.cpp src/nvn/shaders.cpp src/nvn/compute_translate.cpp src/nvn/rescaling_pass.cpp src/nvn/smaa.cpp src/nvn/shadertest.cpp src/nvn/window.cpp src/nvn/display.cpp src/nvn/render.cpp src/nvn/binds.cpp src/nvn/draws.cpp src/nvn/pipeline.cpp src/nvn/formats.cpp src/nvn/queue.cpp src/nvn/heavy.cpp src/nvn/shader_store.cpp src/nvn/research.cpp src/nvn/difftest.cpp
                     ${RT_SERVICES} ${RT_PLATFORM})
 target_link_libraries(nxrt PRIVATE video_core audio_core imgui ooz SDL3::SDL3-static Threads::Threads)
@@ -175,7 +185,10 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gen_include/nxrt_toolchai
                    COMMENT "Hashing the game module's toolchain (NXRT_TOOLCHAIN_ID)" VERBATIM)
 target_sources(nxrt PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gen_include/nxrt_toolchain_id.h")
 target_include_directories(nxrt PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gen_include")
-if (NOT WIN32)
+# A Linux source checkout's builder falls back to the repository's own tools (build.cpp); a release package ships its
+# tools, so linux/build.sh turns this off and the program keeps no path of the build machine.
+option(NXRT_SOURCE_FALLBACK "the builder may use this source checkout's tools (Linux)" ON)
+if (NOT WIN32 AND NXRT_SOURCE_FALLBACK)
     set_property(SOURCE src/build/build.cpp APPEND PROPERTY COMPILE_DEFINITIONS "NXRT_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/..\"")
 endif()
 # drippu's compiled host shaders (nvn/smaa.cpp uses its SMAA shaders): the folder gpu/'s host_shaders makes

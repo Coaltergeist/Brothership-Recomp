@@ -27,7 +27,7 @@ ninja -C "$B/lifter" -j"$JOBS" nxrecomp
 
 # the runtime (C with the shipped clang, C++ with the host's GCC, as the Linux development build)
 cmake -S runtime -B "$B/rt" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$CLANG" \
-    -DGEN_DIR="$B/gen" -DNXRT_GAME=module -DRT_DRIPPU_COMMIT="$(cat DRIPPU_COMMIT)"
+    -DGEN_DIR="$B/gen" -DNXRT_GAME=module -DRT_DRIPPU_COMMIT="$(cat DRIPPU_COMMIT)" -DNXRT_SOURCE_FALLBACK=OFF
 ninja -C "$B/rt" -j"$JOBS" nxrt
 
 # hactool

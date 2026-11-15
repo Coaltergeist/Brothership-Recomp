@@ -16,6 +16,7 @@ namespace rt::nvn {
 
 thread_local DriverTimes* t_driver = nullptr;
 thread_local HeavyPhases* t_heavy_phases = nullptr;
+thread_local HeavyReuse* t_heavy_reuse = nullptr;
 
 double HeavyMs() {
     static const double ms = [] {
@@ -40,6 +41,7 @@ void HeavyProfile::Reset(bool traced, size_t records) {
     rec_driver_n.assign(on ? records : 0, 0);
     pass_open.assign(on ? records : 0, 0);
     phases = {};
+    reuse = {};
     driver = {};
     dispatches.clear();
 }
@@ -168,6 +170,7 @@ struct Files {
     double gpu_ms = 0;
     std::array<u64, kHeavyKinds> kind_ns{}, kind_n{};
     std::array<HeavyPhases, kHeavyKinds> phases{};
+    HeavyReuse reuse;
     DriverTimes driver;
 };
 
@@ -188,6 +191,25 @@ Files& Out() {
     return f;
 }
 
+} // namespace
+
+const char* HeavyReadKindName(u32 kind) {
+    constexpr const char* k[kHeavyReadKinds] = {"uniform", "vertex", "index", "texel", "storage"};
+    return kind < kHeavyReadKinds ? k[kind] : "?";
+}
+const char* HeavyReadStatName(u32 stat) {
+    constexpr const char* s[kHeavyReadStats / 2] = {"all", "repeat clean", "repeat written", "window clean"};
+    return stat < kHeavyReadStats ? s[stat / 2] : "?";
+}
+
+const char* HeavyReuseName(u32 slot) {
+    constexpr const char* kExtra[kHeavyReuse - kHeavyPhases] = {"cbufs but c0 draw words", "cbufs: c0", "cbufs: c2",
+                                                                "cbufs: c1 + uniform buffers", "no GPU write since"};
+    return slot < kHeavyPhases ? HeavyPhaseName(slot) : slot < kHeavyReuse ? kExtra[slot - kHeavyPhases] : "?";
+}
+
+namespace {
+
 void Row(FILE* f, const char* sub, double t_ms, const char* kind, const std::string& name, double ms, u64 count) {
     std::fprintf(f, "%s,%.3f,%s,%s,%.4f,%llu\n", sub, t_ms, kind, name.c_str(), ms, (unsigned long long)count);
 }
@@ -195,7 +217,7 @@ void Row(FILE* f, const char* sub, double t_ms, const char* kind, const std::str
 /// The profile's phase, part, kind and driver rows under `sub` (shared by heavy submissions and second sums).
 void ProfileRows(FILE* f, const char* sub, double t_ms, const std::array<u64, kHeavyKinds>& kind_ns,
                  const std::array<u64, kHeavyKinds>& kind_n, const std::array<HeavyPhases, kHeavyKinds>& phases,
-                 const DriverTimes& driver) {
+                 const HeavyReuse& reuse, const DriverTimes& driver) {
     for (u32 k = 0; k < kHeavyKinds; ++k) {
         if (kind_n[k]) Row(f, sub, t_ms, "records", kKindNames[k], kind_ns[k] / 1e6, kind_n[k]);
         const std::string phase_kind = std::string("phase.") + kKindNames[k], part_kind = std::string("part.") + kKindNames[k];
@@ -206,6 +228,19 @@ void ProfileRows(FILE* f, const char* sub, double t_ms, const std::array<u64, kH
                 Row(f, sub, t_ms, part_kind.c_str(), std::string(HeavyPhaseName(p)) + "/" + HeavyPartName(q),
                     phases[k][p][1 + q] / 1e6, 0);
             }
+        }
+    }
+    for (u32 p = 0; p < kHeavyReuse; ++p) { // the reuse counts
+        if (!reuse.all_n[p]) continue;
+        const char* name = HeavyReuseName(p);
+        Row(f, sub, t_ms, "reuse.all", name, reuse.all_ns[p] / 1e6, reuse.all_n[p]);
+        Row(f, sub, t_ms, "reuse.same", name, reuse.same_ns[p] / 1e6, reuse.same_n[p]);
+    }
+    for (u32 k = 0; k < kHeavyReadKinds; ++k) { // ms column = MB, count = reads
+        if (!reuse.reads[k][0]) continue;
+        for (u32 q = 0; q < kHeavyReadStats; q += 2) {
+            Row(f, sub, t_ms, "reads", std::string(HeavyReadKindName(k)) + "/" + HeavyReadStatName(q),
+                reuse.reads[k][q + 1] / 1e6, reuse.reads[k][q]);
         }
     }
     Row(f, sub, t_ms, "sub", "driver_total", driver.total_ns / 1e6, driver.total_n);
@@ -223,7 +258,7 @@ void FlushSecond(Files& o) {
     Row(o.subs, sub, t_ms, "sub", "submissions", 0, o.subs_n);
     Row(o.subs, sub, t_ms, "sub", "translate", o.translate_ns / 1e6, o.records);
     Row(o.subs, sub, t_ms, "sub", "gpu", o.gpu_ms, 0);
-    ProfileRows(o.subs, sub, t_ms, o.kind_ns, o.kind_n, o.phases, o.driver);
+    ProfileRows(o.subs, sub, t_ms, o.kind_ns, o.kind_n, o.phases, o.reuse, o.driver);
     std::fflush(o.subs);
 }
 
@@ -243,7 +278,7 @@ void HeavyRetired(u32 queue, u64 value, size_t first_record, double gpu_ms, cons
     if (second != o.second) {
         FlushSecond(o);
         const u64 keep = second;
-        o.subs_n = o.records = o.translate_ns = 0, o.gpu_ms = 0, o.kind_ns = {}, o.kind_n = {}, o.phases = {}, o.driver = {};
+        o.subs_n = o.records = o.translate_ns = 0, o.gpu_ms = 0, o.kind_ns = {}, o.kind_n = {}, o.phases = {}, o.reuse = {}, o.driver = {};
         o.second = keep;
     }
     if (!heavy) { // into the second's sums
@@ -253,6 +288,13 @@ void HeavyRetired(u32 queue, u64 value, size_t first_record, double gpu_ms, cons
             for (u32 a = 0; a < kHeavyPhases; ++a) {
                 for (u32 b = 0; b <= kHeavyParts; ++b) o.phases[k][a][b] += p.phases[k][a][b];
             }
+        }
+        for (u32 a = 0; a < kHeavyReuse; ++a) {
+            o.reuse.all_n[a] += p.reuse.all_n[a], o.reuse.same_n[a] += p.reuse.same_n[a];
+            o.reuse.all_ns[a] += p.reuse.all_ns[a], o.reuse.same_ns[a] += p.reuse.same_ns[a];
+        }
+        for (u32 k = 0; k < kHeavyReadKinds; ++k) {
+            for (u32 q = 0; q < kHeavyReadStats; ++q) o.reuse.reads[k][q] += p.reuse.reads[k][q];
         }
         for (u32 i = 0; i < g_fn_count; ++i) o.driver.ns[i] += p.driver.ns[i], o.driver.n[i] += p.driver.n[i];
         o.driver.total_ns += p.driver.total_ns, o.driver.total_n += p.driver.total_n;
@@ -268,7 +310,7 @@ void HeavyRetired(u32 queue, u64 value, size_t first_record, double gpu_ms, cons
     for (double d : dispatch_gpu_ms) shaders += d;
     Row(o.subs, sub, t_ms, "gpu", "dispatch_shaders", shaders, dispatch_gpu_ms.size());
     Row(o.subs, sub, t_ms, "gpu", "rest", gpu_ms - shaders, 0);
-    ProfileRows(o.subs, sub, t_ms, kind_ns, kind_n, p.phases, p.driver);
+    ProfileRows(o.subs, sub, t_ms, kind_ns, kind_n, p.phases, p.reuse, p.driver);
     // stretches: the CPU time at each one's end (records' own times summed), its GPU time, and where a cut could go
     u64 cpu = 0;
     for (size_t s = 0; s * stretch_records < p.rec_ns.size(); ++s) {

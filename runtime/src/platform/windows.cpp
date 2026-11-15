@@ -75,10 +75,13 @@ namespace rt::platform {
 
 namespace {
 
+std::atomic<bool> g_own_exit{false}; // NoteOwnExit: the coming ExitProcess is ours (InstallCrashReport)
+
 [[noreturn]] void Die(const char* what, uintptr_t a = 0, size_t n = 0) {
     std::fprintf(stderr, "[rt] FATAL: windows memory: %s at 0x%llx+0x%llx (error %lu)\n", what, (unsigned long long)a,
                  (unsigned long long)n, GetLastError());
     std::fflush(stderr);
+    g_own_exit.store(true);
     std::_Exit(70);
 }
 
@@ -847,8 +850,9 @@ BOOL WINAPI OnConsoleEvent(DWORD type) {
     return TRUE;
 }
 
-/// "module+0xoffset" for a code address (resolve with llvm-symbolizer and the module's .pdb or map).
-std::string FrameName(uintptr_t pc) {
+/// "module+0xoffset" for a code address (resolve with llvm-symbolizer and the module's .pdb or map), into `out`
+/// (no heap: also used while the process ends).
+void FrameNameTo(uintptr_t pc, char* out, size_t size) {
     HMODULE m = nullptr;
     char name[MAX_PATH] = "?";
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -859,8 +863,12 @@ std::string FrameName(uintptr_t pc) {
             std::snprintf(name, sizeof name, "%s", base ? base + 1 : path);
         }
     }
+    std::snprintf(out, size, "%s+0x%llx", name, (unsigned long long)(pc - reinterpret_cast<uintptr_t>(m)));
+}
+
+std::string FrameName(uintptr_t pc) {
     char b[MAX_PATH + 32];
-    std::snprintf(b, sizeof b, "%s+0x%llx", name, (unsigned long long)(pc - reinterpret_cast<uintptr_t>(m)));
+    FrameNameTo(pc, b, sizeof b);
     return b;
 }
 
@@ -868,10 +876,10 @@ void PrintFrame(uintptr_t pc) {
     std::fprintf(stderr, "[rt]   %s\n", FrameName(pc).c_str());
 }
 
-/// Walks a stopped thread's stack with the unwind tables (no symbols needed).
-void WalkStack(CONTEXT ctx) {
+/// Walks a stopped thread's stack with the unwind tables (no symbols needed), calling `frame(pc)` for each frame.
+template <class F> void ForEachFrame(CONTEXT ctx, F frame) {
     for (int i = 0; i < 48 && ctx.Rip; ++i) {
-        PrintFrame(ctx.Rip);
+        frame(static_cast<uintptr_t>(ctx.Rip));
         DWORD64 image = 0;
         PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(ctx.Rip, &image, nullptr);
         if (!f) { // a leaf function: the return address is on top of the stack
@@ -880,9 +888,13 @@ void WalkStack(CONTEXT ctx) {
             continue;
         }
         void* handler_data = nullptr;
-        DWORD64 frame = 0;
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx.Rip, f, &ctx, &handler_data, &frame, nullptr);
+        DWORD64 establisher = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx.Rip, f, &ctx, &handler_data, &establisher, nullptr);
     }
+}
+
+void WalkStack(const CONTEXT& ctx) {
+    ForEachFrame(ctx, PrintFrame);
 }
 
 // --- Crash report -------------------------------------------------------------------------------------------
@@ -901,13 +913,17 @@ const char* ExceptionName(DWORD code) {
     case EXCEPTION_DATATYPE_MISALIGNMENT: return "misaligned access";
     case EXCEPTION_BREAKPOINT: return "breakpoint";
     case 0xE06D7363: return "C++ exception nobody caught";
+    // Usually raised as a fast fail, which ends the process without any handler (then only the Windows event log
+    // has it); named for the times they arrive as ordinary exceptions.
+    case 0xC0000409: return "stack buffer overrun / fast fail";
+    case 0xC0000374: return "heap corruption";
     default: return "exception";
     }
 }
 
 /// nxrt_crash.dmp in the working directory (stacks, threads, modules; not the guest window): open it in WinDbg or
 /// Visual Studio next to nxrt.exe. dbghelp is loaded only now, so a normal run does not need it.
-void WriteMinidump(EXCEPTION_POINTERS* ep) {
+void WriteMinidump(EXCEPTION_POINTERS* ep, DWORD tid) {
     using PFN_MiniDumpWriteDump = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
                                                 PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
     HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll");
@@ -916,7 +932,7 @@ void WriteMinidump(EXCEPTION_POINTERS* ep) {
     if (!write) return;
     HANDLE f = CreateFileW(L"nxrt_crash.dmp", GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
-    MINIDUMP_EXCEPTION_INFORMATION info{GetCurrentThreadId(), ep, FALSE};
+    MINIDUMP_EXCEPTION_INFORMATION info{tid, ep, FALSE};
     const BOOL ok = write(GetCurrentProcess(), GetCurrentProcessId(), f,
                           static_cast<MINIDUMP_TYPE>(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory),
                           ep ? &info : nullptr, nullptr, nullptr);
@@ -924,15 +940,30 @@ void WriteMinidump(EXCEPTION_POINTERS* ep) {
     std::fprintf(stderr, "[rt]   %s\n", ok ? "minidump: nxrt_crash.dmp" : "minidump: could not be written");
 }
 
-/// Everything a crash report says after its first line; then the process ends (exit code 71).
-[[noreturn]] void FinishCrash(const CONTEXT& ctx, EXCEPTION_POINTERS* ep) {
-    std::fprintf(stderr, "[rt]   host tid %lu, stack:\n", GetCurrentThreadId());
+/// Everything a crash report says after its first line, for host thread `tid` (the caller, or the overflowed thread
+/// OverflowReport stands in for; `describe`: g_describe reads the caller's own guest state); then the process ends
+/// (exit code 71).
+[[noreturn]] void FinishCrash(const CONTEXT& ctx, EXCEPTION_POINTERS* ep, DWORD tid, bool describe) {
+    std::fprintf(stderr, "[rt]   host tid %lu, stack:\n", tid);
     WalkStack(ctx);
-    if (g_describe) g_describe();
-    WriteMinidump(ep);
+    if (describe && g_describe) g_describe();
+    WriteMinidump(ep, tid);
     std::fflush(stderr);
     TerminateProcess(GetCurrentProcess(), 71);
     std::_Exit(71);
+}
+
+/// A stack overflow is reported in the 64 KB the thread keeps (GuardStack): its first line and the guest state there,
+/// the stack walk and the minidump from a thread of its own with a fresh stack.
+struct OverflowReport {
+    CONTEXT ctx;
+    EXCEPTION_POINTERS* ep;
+    DWORD tid;
+};
+OverflowReport g_overflow; // one crash per process (FirstCrash); static: the overflowed stack has no room for it
+
+DWORD WINAPI ReportOverflow(void*) {
+    FinishCrash(g_overflow.ctx, g_overflow.ep, g_overflow.tid, false);
 }
 
 /// A second crash while reporting one: end at once.
@@ -957,7 +988,16 @@ LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* ep) {
             std::fprintf(stderr, "[rt]   guest address 0x%llx: not mapped by the guest\n", (unsigned long long)(a - g_lo));
         }
     }
-    FinishCrash(*ep->ContextRecord, ep);
+    if (r.ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+        if (g_describe) g_describe();
+        g_overflow = {*ep->ContextRecord, ep, GetCurrentThreadId()};
+        if (HANDLE h = CreateThread(nullptr, 1 << 20, ReportOverflow, nullptr, 0, nullptr)) {
+            WaitForSingleObject(h, INFINITE); // FinishCrash ends the process there
+        }
+        std::fprintf(stderr, "[rt]   (no thread for the rest of the report: walking the overflowed stack)\n");
+        FinishCrash(*ep->ContextRecord, ep, GetCurrentThreadId(), false);
+    }
+    FinishCrash(*ep->ContextRecord, ep, GetCurrentThreadId(), true);
 }
 
 [[noreturn]] void CrashHere(const char* what) {
@@ -965,8 +1005,69 @@ LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* ep) {
     std::fprintf(stderr, "[rt] CRASH: %s\n", what);
     CONTEXT ctx{};
     RtlCaptureContext(&ctx);
-    FinishCrash(ctx, nullptr);
+    FinishCrash(ctx, nullptr, GetCurrentThreadId(), true);
 }
+
+/// Keeps 64 KB of the calling thread's stack for the crash report: without it a stack overflow leaves the handler a
+/// few KB and the process dies with no line in the log (the Beta 1.3 first-strike end may be one). Only on stacks of
+/// 1 MB or more (ours are 16 MB, CMakeLists /STACK): a small stack of a library's thread would lose too much of it.
+void GuardStack() {
+    static const bool off = [] { // RT_STACK_GUARANTEE=0: without it (A/B for the crash test)
+        const char* e = std::getenv("RT_STACK_GUARANTEE");
+        return e && *e == '0';
+    }();
+    if (off) return;
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    if (high - low < (1u << 20)) return;
+    ULONG keep = 64 * 1024;
+    SetThreadStackGuarantee(&keep);
+}
+
+/// The process ends through ExitProcess and it was not us (NoteOwnExit, exit(), a return from main) nor a crash
+/// report (TerminateProcess): a driver or a library ended it. Runs on the thread that called ExitProcess, after
+/// every other thread was stopped — one of them may hold the log's lock or the heap's, so this takes neither: the
+/// line and the calling stack are formatted on this stack and written straight to the log's file.
+void ReportForeignExit() {
+    char b[6144];
+    size_t n = static_cast<size_t>(std::snprintf(b, sizeof b,
+                                                 "[rt] ENDED: ExitProcess was called outside the runtime's own exit "
+                                                 "(a driver or a library ended the process); host tid %lu, stack:\n",
+                                                 GetCurrentThreadId()));
+    CONTEXT ctx{};
+    RtlCaptureContext(&ctx);
+    ForEachFrame(ctx, [&](uintptr_t pc) {
+        if (n + MAX_PATH + 48 > sizeof b) return;
+        char f[MAX_PATH + 32];
+        FrameNameTo(pc, f, sizeof f);
+        n += static_cast<size_t>(std::snprintf(b + n, sizeof b - n, "[rt]   %s\n", f));
+    });
+    _fflush_nolock(stderr); // what the log thread had not written yet
+    const HANDLE out = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stderr)));
+    DWORD written = 0;
+    if (out != INVALID_HANDLE_VALUE) WriteFile(out, b, static_cast<DWORD>(n), &written, nullptr);
+}
+
+void NTAPI OnTlsEvent(PVOID, DWORD reason, PVOID) {
+    if (reason == DLL_THREAD_ATTACH) {
+        GuardStack(); // every thread the process starts, the driver's too
+    } else if (reason == DLL_PROCESS_DETACH && !g_own_exit.load() && !g_crashing.load()) {
+        ReportForeignExit(); // (an executable is never unloaded: this is the end; `reserved` is null here, measured)
+    }
+}
+
+} // namespace
+
+// The TLS callback (the C runtime's TLS directory calls everything in .CRT$XL?): Windows runs it for every new
+// thread and when ExitProcess ends the process.
+extern "C" {
+#pragma comment(linker, "/INCLUDE:_tls_used")
+#pragma comment(linker, "/INCLUDE:nxrt_tls_event")
+#pragma section(".CRT$XLB", long, read)
+__declspec(allocate(".CRT$XLB")) extern const PIMAGE_TLS_CALLBACK nxrt_tls_event = OnTlsEvent;
+}
+
+namespace {
 
 void OnTerminate() {
     CrashHere("std::terminate (an exception nobody caught, or one thrown through a function that may not throw)");
@@ -975,6 +1076,16 @@ void OnTerminate() {
 void OnAbort(int) {
     CrashHere("abort()");
 }
+
+/// RT_CRASH_TEST=overflow: recurses until the stack ends (4 KB a frame, kept by the volatile buffer).
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winfinite-recursion"
+[[gnu::noinline]] int Overflow(int depth) {
+    volatile char pad[4096];
+    pad[0] = static_cast<char>(depth);
+    return Overflow(depth + 1) + pad[0];
+}
+#pragma clang diagnostic pop
 
 } // namespace
 
@@ -986,6 +1097,19 @@ void InstallCrashReport(void (*describe)()) {
     SetUnhandledExceptionFilter(OnUnhandledException);
     std::set_terminate(OnTerminate);
     std::signal(SIGABRT, OnAbort);
+    GuardStack(); // this thread (the TLS callback guards the threads started from now on)
+    std::atexit([] { g_own_exit.store(true); }); // exit() and a return from main end the process on our terms
+    // RT_CRASH_TEST=overflow | exitprocess: ends the run the two ways that used to leave no line in the log, to check
+    // both are reported (a stack overflow on a std::thread: CRASH ... stack overflow; ExitProcess from here: ENDED).
+    if (const char* t = std::getenv("RT_CRASH_TEST"); t && *t) {
+        std::fprintf(stderr, "[rt] crash test: %s\n", t);
+        if (!std::strcmp(t, "exitprocess")) ExitProcess(5);
+        if (!std::strcmp(t, "overflow")) std::thread([] { Overflow(1); }).join();
+    }
+}
+
+void NoteOwnExit() {
+    g_own_exit.store(true);
 }
 
 void InstallDumpTrigger(void (*request)()) {

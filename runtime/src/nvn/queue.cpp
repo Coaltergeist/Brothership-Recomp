@@ -702,7 +702,7 @@ size_t SubmitPart(Queue* q, const std::vector<Rec>& recs, size_t begin, size_t e
     s->heavy.Reset(s->traced, part.size());
     struct DriverScope { // RT_PROFILE_HEAVY: this thread's Vulkan calls count to the submission until it returns
         explicit DriverScope(DriverTimes* d) { t_driver = d; }
-        ~DriverScope() { t_driver = nullptr, t_heavy_phases = nullptr; }
+        ~DriverScope() { t_driver = nullptr, t_heavy_phases = nullptr, t_heavy_reuse = nullptr; }
     } driver_scope(s->heavy.on ? &s->heavy.driver : nullptr);
     if (s->traced && !q->trace_id) {
         static std::atomic<u32> ids{0};
@@ -804,6 +804,7 @@ size_t SubmitPart(Queue* q, const std::vector<Rec>& recs, size_t begin, size_t e
         TraceBytes bytes0{};
         if (s->heavy.on) {
             t_heavy_phases = &s->heavy.phases[rec_kind];
+            t_heavy_reuse = &s->heavy.reuse;
             driver_ns0 = s->heavy.driver.total_ns, driver_n0 = s->heavy.driver.total_n;
             if (rec_kind == 1) {
                 bytes0 = s->bytes;
@@ -913,7 +914,7 @@ size_t SubmitPart(Queue* q, const std::vector<Rec>& recs, size_t begin, size_t e
                 d.from_device = y.from_device - bytes0.from_device, d.writes = y.writes - bytes0.writes;
                 d.wb_end = static_cast<u32>(s->writes.size());
             }
-            t_heavy_phases = nullptr;
+            t_heavy_phases = nullptr, t_heavy_reuse = nullptr;
         }
         if (s->traced) {
             const size_t done = static_cast<size_t>(&r - part.data()) + 1;

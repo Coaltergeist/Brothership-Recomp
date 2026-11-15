@@ -61,6 +61,9 @@ u32 ScaleN();
 /// the storage gets other settings), its layout transition recorded into `cmd`
 /// at first use.
 std::shared_ptr<TextureImage> ImageFor(const TextureState& t, const Vulkan::vk::CommandBuffer& cmd);
+/// Counts the image cache's changes (an image made anew for an address, or dropped): equal values mean ImageFor would
+/// return the same images as before (the draws' target reuse).
+u64 ImageGeneration();
 
 /// A view of `img` (the image of texture `t`) as a shader reads it: of `type`, restricted by `view` (levels,
 /// layers, swizzle, depth-stencil mode). Created at first use, kept with the image.
@@ -198,6 +201,18 @@ struct Translator {
     std::vector<std::pair<UploadRing::Slice, UploadRing::Slice>> after_dispatch{};
     std::vector<u64> after_dispatch_sizes{};
     const void* dynamic_of = nullptr; // draws.cpp: the linked pipeline whose draw-time state `cmd` holds now
+    /// draws.cpp NoteReuse (RT_PROFILE_HEAVY): the previous draw's inputs in this command
+    /// buffer, one key per draw phase, and the c0 bytes its shaders read.
+    std::array<u64, 16> reuse_keys{};
+    bool reuse_valid = false;
+    std::vector<u8> reuse_c0{};
+    /// draws.cpp: what the previous draw in this command buffer computed, for the next one
+    /// to reuse when its inputs are the same (draws.cpp DrawReuse; made at the first draw).
+    std::shared_ptr<void> draw_reuse{};
+    std::shared_ptr<void> read_probe{}; // draws.cpp ProbeRead (RT_PROFILE_HEAVY)
+    std::shared_ptr<void> write_gens{}; // draws.cpp WriteGens
+    std::shared_ptr<void> index_memo{}; // draws.cpp IndexRange's memo
+    std::shared_ptr<void> uniform_windows{}; // draws.cpp UniformWindow
     /// RT_TRACE_WAITS (queue.cpp): called right before and after each vkCmdDispatch with its compute code's hash,
     /// to time the dispatch on the GPU.
     std::function<void(u64 code_hash, bool after)> time_dispatch{};
@@ -218,6 +233,8 @@ struct Translator {
     struct SnapshotEntry {
         UploadRing::Slice slice;
         size_t writes;
+        u64 gen_sig = 0;     // draws.cpp WriteGens: the block write counters over it when `writes` was current
+        bool gen_ok = false; // (false: not known; the writes since are scanned)
     };
     std::map<std::array<u64, 2>, SnapshotEntry> snapshots{};
     /// draws.cpp PageCopy: blocks of guest memory with room reserved in this

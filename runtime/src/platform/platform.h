@@ -141,8 +141,14 @@ void SetCurrentThreadName(const char* name);
 /// illegal instruction ... — after the platform's own guest-memory handling), std::terminate (an exception
 /// nobody caught) or abort(). The report: what and where, the crashing thread's host stack (Windows:
 /// "module+0xoffset" from the unwind tables; Linux: backtrace), then `describe()` (the runtime's guest state).
-/// Windows also writes nxrt_crash.dmp (a minidump for WinDbg / Visual Studio) and shows no error dialog.
+/// Windows also writes nxrt_crash.dmp (a minidump for WinDbg / Visual Studio) and shows no error dialog, keeps
+/// 64 KB of every thread's stack (of 1 MB or more, the driver's threads too) for the report so a stack overflow is
+/// reported (from a thread of its own), and logs "ENDED: ExitProcess was called outside the runtime's own exit" with
+/// the calling stack when a driver or library ends the process (not after NoteOwnExit, exit() or a return from main).
 void InstallCrashReport(void (*describe)());
+/// The process is about to end on the runtime's own terms (Exit, Fatal, std::_Exit): Windows then does not report the
+/// ExitProcess that follows (InstallCrashReport). POSIX: nothing.
+void NoteOwnExit();
 
 /// Calls `request` (from a signal or console handler: it must only set a flag)
 /// when the user asks for a thread dump. POSIX: kill -USR1 <pid>.

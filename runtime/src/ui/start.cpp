@@ -332,7 +332,8 @@ void SettingsPage(Screen& s) {
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 1.4f);
         for (const options::Option& o : options::All()) {
-            if (std::strcmp(o.name, "RT_MODS") == 0) continue; // the mods page
+            if (std::strcmp(o.name, "RT_MODS") == 0) continue;  // the mods page
+            if (std::strcmp(o.name, "RT_CVARS") == 0) continue; // the settings file only (advanced)
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::AlignTextToFramePadding();

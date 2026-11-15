@@ -267,6 +267,10 @@ public:
                         Log("romfs read %s +0x%llx size 0x%llx", f.rel.c_str(),
                             (unsigned long long)(offset - f.offset), (unsigned long long)n);
                     }
+                    // A movie's playback starts by reading its header: log each one (which scenes are movies).
+                    if (offset == f.offset && f.rel.size() > 4 && f.rel.compare(f.rel.size() - 4, 4, ".bk2") == 0) {
+                        Log("movie: %s (t=%.1f s)", f.rel.c_str(), Uptime());
+                    }
                     if (!f.file.IsOpen()) {
                         opened.push_back(f.rel); // first read of this file
                         if (!f.file.Open(f.path, platform::File::Mode::kRead)) {

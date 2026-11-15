@@ -152,20 +152,39 @@ if (CMAKE_CROSSCOMPILING AND WIN32)
         --ld=${WINCROSS_LLVM}/lld-link --ar=${WINCROSS_LLVM}/llvm-ar --nm=${WINCROSS_LLVM}/llvm-nm
         "--extra-cflags=${WINCROSS_CFLAGS}" "--extra-ldflags=${WINCROSS_LDFLAGS}")
 endif()
+# Configure writes config.h each run; the make step depends on it, so a changed option rebuilds the libraries (the
+# Makefile alone is a stub configure leaves as it was). The old objects go first: FFmpeg's make does not track its
+# flags, and objects that do not include config.h would stay as built before (2026-11-15: debug info kept from an
+# older configure). The compilers are given by name, their folders on PATH: FFmpeg keeps its configure line in the
+# program (av*_configuration), which then names no folder of the build machine.
+get_filename_component(FFMPEG_CC_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+get_filename_component(FFMPEG_CC_NAME "${CMAKE_C_COMPILER}" NAME)
+get_filename_component(FFMPEG_CXX_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+get_filename_component(FFMPEG_CXX_NAME "${CMAKE_CXX_COMPILER}" NAME)
+# (a fixed PATH, not the inherited one: WSL's holds Windows folders like "Program Files (x86)", which break the
+# unquoted shell command, and the build should not depend on it)
+set(FFMPEG_PATH "PATH=${FFMPEG_CC_DIR}:${FFMPEG_CXX_DIR}:/usr/local/bin:/usr/bin:/bin")
+set(FFMPEG_OBJ_DIRS)
+foreach (c ${FFMPEG_COMPONENTS})
+    list(APPEND FFMPEG_OBJ_DIRS ${FFMPEG_BUILD}/lib${c})
+endforeach()
+list(APPEND FFMPEG_OBJ_DIRS ${FFMPEG_BUILD}/compat)
 add_custom_command(
-    OUTPUT ${FFMPEG_BUILD}/Makefile
-    COMMAND ${FFMPEG_SRC}/configure ${FFMPEG_CROSS}
+    OUTPUT ${FFMPEG_BUILD}/Makefile ${FFMPEG_BUILD}/config.h
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${FFMPEG_OBJ_DIRS}
+    COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_PATH} ${FFMPEG_SRC}/configure ${FFMPEG_CROSS}
             --disable-avdevice --disable-avformat --disable-doc --disable-everything
             --disable-ffmpeg --disable-ffprobe --disable-network --disable-swresample
             --disable-autodetect --disable-x86asm
+            --disable-debug # (no debug info: it named the build machine's folders in the program)
             --enable-decoder=h264 --enable-decoder=vp8 --enable-decoder=vp9
             --enable-filter=yadif,scale --enable-pic
-            --cc=${CMAKE_C_COMPILER} --cxx=${CMAKE_CXX_COMPILER}
+            --cc=${FFMPEG_CC_NAME} --cxx=${FFMPEG_CXX_NAME}
     WORKING_DIRECTORY ${FFMPEG_BUILD})
 add_custom_command(
     OUTPUT ${FFmpeg_LIBRARIES}
-    COMMAND make -j8
-    DEPENDS ${FFMPEG_BUILD}/Makefile
+    COMMAND ${CMAKE_COMMAND} -E env ${FFMPEG_PATH} make -j8
+    DEPENDS ${FFMPEG_BUILD}/Makefile ${FFMPEG_BUILD}/config.h
     WORKING_DIRECTORY ${FFMPEG_BUILD})
 add_custom_target(ffmpeg-build DEPENDS ${FFmpeg_LIBRARIES})
 set(FFmpeg_INCLUDE_DIR ${FFMPEG_SRC} ${FFMPEG_BUILD})

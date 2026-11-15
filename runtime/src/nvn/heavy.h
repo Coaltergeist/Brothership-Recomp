@@ -7,7 +7,10 @@
 // one whose translation or GPU time reached <ms> is written out (in the run folder, as waits.csv):
 //   heavy_subs.csv        one row per measured item: sub,t_ms,kind,name,ms,count
 //                         (kind: sub = totals; phase.draw / phase.dispatch / phase.other = a phase's CPU time,
-//                         part.<kind> = a part of one; driver = one Vulkan function; gpu = shaders / rest)
+//                         part.<kind> = a part of one; driver = one Vulkan function; gpu = shaders / rest;
+//                         reuse.all / reuse.same = per draw phase, the draws checked / those whose inputs equal
+//                         the previous draw's in the same command buffer, with the phase's time
+//                         in them)
 //   heavy_stretches.csv   one row per stretch of kCheckpointRecords records: CPU end, GPU time, open pass, ops
 //   heavy_dispatches.csv  one row per dispatch: CPU / driver / GPU time, bytes in, written back and changed
 // The submissions below <ms> are summed per second of uptime into heavy_subs.csv (sub = s<second>), the
@@ -29,7 +32,33 @@ namespace rt::nvn {
 double HeavyMs();
 inline bool HeavyOn() { return HeavyMs() > 0; }
 
-constexpr u32 kHeavyPhases = 11, kHeavyParts = 10; // draws.cpp's Phase and Part
+constexpr u32 kHeavyPhases = 11, kHeavyParts = 18; // draws.cpp's Phase and Part
+// The parts pipeline.cpp (PipelineFor) and render.cpp (BindTargets) time (draws.cpp's Part values).
+constexpr u32 kHeavyPartLookup = 6, kHeavyPartKey = 10, kHeavyPartChecks = 11;
+/// Times a part of the current draw phase from outside draws.cpp: start (0 when the timers are off) ... end.
+u64 HeavyPartStart();
+void HeavyPartEnd(u32 part, u64 start);
+
+/// per draw phase, the draws checked and those whose inputs equal the previous draw's in
+/// the same command buffer (draws.cpp NoteReuse), each with the phase's time in those draws.
+// After the phases, the constant buffers' check once more in parts: c0 equal apart from the draw's own words (and
+// everything else as "cbufs"), then c0 alone, c2 alone, the compiler constants and uniform buffers alone; last, whether
+// no GPU write was recorded in the submission since the previous draw (the keys compare places, not contents: a
+// reuse of copied guest memory also needs no write over it).
+constexpr u32 kHeavyReuse = kHeavyPhases + 5;
+const char* HeavyReuseName(u32 slot); // heavy.cpp
+// the guest memory reads of a submission's draws, by kind (uniform buffer, vertex, index,
+// texel buffer, storage buffer), each a count and bytes: all; repeats of an (address, size) read earlier in the
+// submission with no GPU write recorded over its 64 KB blocks since ("clean": a memo would serve it) or with one
+// ("written"); and uniform reads whose 64 KB window was read before and is clean ("window": a window copy serves it).
+constexpr u32 kHeavyReadKinds = 5, kHeavyReadStats = 8;
+const char* HeavyReadKindName(u32 kind);  // heavy.cpp
+const char* HeavyReadStatName(u32 stat);  // heavy.cpp
+struct HeavyReuse {
+    std::array<u64, kHeavyReuse> all_n{}, same_n{}, all_ns{}, same_ns{};
+    std::array<std::array<u64, kHeavyReadStats>, kHeavyReadKinds> reads{}; // [kind][n, bytes, clean n/bytes, written n/bytes, window n/bytes]
+};
+extern thread_local HeavyReuse* t_heavy_reuse; // the current submission's (queue.cpp), as t_heavy_phases
 constexpr u32 kHeavyKinds = 3;                    // draw, dispatch, other records
 constexpr u32 kDriverFns = 200;                   // the device function table's entries, at most
 
@@ -72,6 +101,7 @@ struct HeavyProfile {
     std::vector<u16> rec_driver_n;
     std::vector<u8> pass_open; // after each record
     std::array<HeavyPhases, kHeavyKinds> phases{};
+    HeavyReuse reuse;
     DriverTimes driver;
     std::vector<HeavyDispatch> dispatches;
     void Reset(bool traced, size_t records); // on: RT_PROFILE_HEAVY and a traced submission

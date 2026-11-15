@@ -39,6 +39,7 @@
 // drippu's headers first: vk.h brings X11's `Success` macro, which breaks its NvResult::Success.
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 
+#include "heavy.h"
 #include "pipeline.h"
 #include "shader_store.h"
 #include "shaders.h"
@@ -560,6 +561,51 @@ void Put(std::vector<u8>& key, const T& v) {
     key.insert(key.end(), p, p + sizeof v);
 }
 
+/// A pipeline key built on the stack (PipelineFor built a std::vector for every draw, 0.52 us
+/// of its 1.22 in the cutscene). The maps below are searched with its bytes; a key is copied only when it is new.
+struct KeyBuf {
+    std::array<u8, 2048> b;
+    size_t n = 0;
+    std::span<const u8> View() const { return {b.data(), n}; }
+};
+template <typename T>
+void Put(KeyBuf& key, const T& v) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (key.n + sizeof v > key.b.size()) Fatal("nvn: a pipeline key longer than %zu bytes", key.b.size());
+    std::memcpy(key.b.data() + key.n, &v, sizeof v);
+    key.n += sizeof v;
+}
+struct KeyHash { // (transparent: a KeyBuf's bytes find a stored std::vector<u8> key)
+    using is_transparent = void;
+    size_t operator()(std::span<const u8> k) const {
+        u64 h = 1469598103934665603ull ^ k.size();
+        size_t i = 0;
+        for (; i + 8 <= k.size(); i += 8) {
+            u64 w;
+            std::memcpy(&w, k.data() + i, 8);
+            h = (h ^ w) * 0x100000001b3ull;
+            h ^= h >> 29;
+        }
+        for (; i < k.size(); ++i) h = (h ^ k[i]) * 0x100000001b3ull;
+        return static_cast<size_t>(h);
+    }
+};
+struct KeyEq {
+    using is_transparent = void;
+    bool operator()(std::span<const u8> a, std::span<const u8> b) const {
+        return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0;
+    }
+};
+template <typename V>
+using KeyMap = std::unordered_map<std::vector<u8>, V, KeyHash, KeyEq>;
+/// The entry for `key` (made empty when new; references to entries stay valid as the map grows).
+template <typename V>
+V& EntryFor(KeyMap<V>& m, const KeyBuf& key) {
+    auto it = m.find(key.View());
+    if (it == m.end()) it = m.emplace(std::vector<u8>(key.View().begin(), key.View().end()), V{}).first;
+    return it->second;
+}
+
 /// One stage on its way through drippu's recompiler: the IR program lives in these pools until it is
 /// emitted.
 struct StageWork {
@@ -585,7 +631,7 @@ std::vector<u8> ReadCode(const ProgramStage& s) {
 struct Cache {
     std::mutex mu;
     std::condition_variable built; // a worker finished a pipeline (PipelineFor)
-    std::map<std::vector<u8>, std::vector<std::unique_ptr<GraphicsPipeline>>> pipelines;
+    KeyMap<std::vector<std::unique_ptr<GraphicsPipeline>>> pipelines;
 };
 Cache& Pipelines() {
     static Cache c;
@@ -2604,7 +2650,8 @@ void RunSeedOnly() {
 const GraphicsPipeline& PipelineFor(const RenderState& rs, u32 mode, const TargetSet& targets) {
     const ClipModes clip = DeviceClipModes(rs.device);
     StartSeed(clip.depth_mode == 0, false); // RT_NVN_SEED: once, at the first pipeline (the device's depth mode is set)
-    std::vector<u8> key;
+    const u64 key_t = HeavyPartStart(); // key, lookup, checks
+    KeyBuf key;
     Put(key, clip);
     Put(key, mode);
     for (u32 s = 0; s < kStages - 1; ++s) {
@@ -2629,10 +2676,13 @@ const GraphicsPipeline& PipelineFor(const RenderState& rs, u32 mode, const Targe
         Put(key, rs.depth_bounds_enable);
     }
     Put(key, targets.pass);
+    HeavyPartEnd(kHeavyPartKey, key_t);
 
     Cache& c = Pipelines();
+    const u64 lookup_t = HeavyPartStart();
     std::unique_lock lock(c.mu);
-    auto& variants = c.pipelines[key];
+    auto& variants = EntryFor(c.pipelines, key);
+    HeavyPartEnd(kHeavyPartLookup, lookup_t);
     const PipelineBuilds& async = Async();
     // this draw may wait for what is left of the frame's budget (PipelineFrameStart); what it waited is spent
     const auto start = std::chrono::steady_clock::now();
@@ -2648,6 +2698,7 @@ const GraphicsPipeline& PipelineFor(const RenderState& rs, u32 mode, const Targe
         }
     } spend{start};
     for (;;) {
+        const u64 checks_t = HeavyPartStart();
         GraphicsPipeline* building = nullptr;
         for (const auto& p : variants) {
             if (p->stale) continue;
@@ -2661,6 +2712,7 @@ const GraphicsPipeline& PipelineFor(const RenderState& rs, u32 mode, const Targe
                 continue;
             }
             if (!p->failed.empty()) throw NotYet(p->failed);
+            HeavyPartEnd(kHeavyPartChecks, checks_t);
             return *p;
         }
         if (!async.threads) {
@@ -2741,7 +2793,7 @@ void BuildCompute(ComputePipeline& p, const RenderState& rs) {
 
 struct ComputeCache {
     std::mutex mu;
-    std::map<std::vector<u8>, std::vector<std::unique_ptr<ComputePipeline>>> pipelines;
+    KeyMap<std::vector<std::unique_ptr<ComputePipeline>>> pipelines;
 };
 
 } // namespace
@@ -2751,7 +2803,7 @@ u64 StageContentHash(const ProgramStage& s) { return StageHash(s); }
 const ComputePipeline& ComputePipelineFor(const RenderState& rs) {
     if (!rs.compute_stage) Unsupported("a dispatch without a compute program");
     const ProgramStage& st = *rs.compute_stage;
-    std::vector<u8> key;
+    KeyBuf key;
     Put(key, st.code);
     Put(key, std::array<u32, 8>{st.program_offset, st.program_size, st.constants_offset, st.constants_size,
                                 st.workgroup[0], st.workgroup[1], st.workgroup[2], st.shared_memory});
@@ -2759,7 +2811,7 @@ const ComputePipeline& ComputePipelineFor(const RenderState& rs) {
     Put(key, st.tag_word);
     static ComputeCache c;
     std::lock_guard lock(c.mu);
-    auto& variants = c.pipelines[key];
+    auto& variants = EntryFor(c.pipelines, key);
     for (const auto& p : variants) {
         if (!StillHolds(*p, rs)) continue;
         if (!p->failed.empty()) throw NotYet(p->failed);

@@ -7,7 +7,7 @@
 
 namespace rt::nvn {
 
-/// RT_AA: off (default) or smaa; stops the run for another value.
+/// RT_AA=smaa (the other values: the game's FXAA or nothing, cvars.cpp).
 bool SmaaOn();
 
 /// Records SMAA of `input` (level 0, `extent` texels, in VK_IMAGE_LAYOUT_GENERAL after everything that wrote it)

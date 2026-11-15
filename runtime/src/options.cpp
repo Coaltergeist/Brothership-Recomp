@@ -82,11 +82,28 @@ const std::vector<Option>& All() {
     static const std::vector<Option> all{
         {"RT_RES", "Resolution", "auto|360p|540p|720p|1080p|1440p|2160p|4k",
          "Auto|360p|540p|720p|1080p|1440p|2160p (4K)|", "720p"}, // (auto: the window's height, 720p-1440p)
-        {"RT_AA", "Anti-aliasing", "off|smaa", "Off|SMAA", "off"},
+        // (fxaa: the game's own; smaa: ours on the presented image, the game's FXAA off; none: neither; off: the
+        // old name of fxaa, kept so earlier settings files and commands mean what they did)
+        {"RT_AA", "Anti-aliasing", "fxaa|smaa|none|off", "FXAA|SMAA|Off|", "fxaa"},
         {"RT_WINDOW", "Window mode", "windowed|borderless", "Windowed|Borderless", "windowed"},
         {"RT_WINDOW_SIZE", "Window size", "<width>x<height>", nullptr, "1280x720"},
         {"RT_FPS", "Frame rate", "30|60|uncapped", "30|60|Uncapped", "30"}, // (60 and up need the 60 fps mod)
         {"RT_VSYNC", "VSync", "on|off", "On|Off", "on"},
+        // The game's own effects (cvars.cpp: Unreal console variables, set before the game starts; the defaults
+        // leave the game's values alone)
+        {"RT_BLOOM", "Bloom", "veryhigh|high|medium|low|verylow|off", "Very high|High|Medium|Low|Very low|Off",
+         "veryhigh"},
+        {"RT_FILM_GRAIN", "Film grain", "on|off", "On|Off", "on"},
+        {"RT_VIGNETTE", "Vignette", "on|off", "On|Off", "on"},
+        {"RT_AUTO_EXPOSURE", "Auto exposure", "on|off", "On|Off", "on"},
+        {"RT_CHROMATIC_ABERRATION", "Chromatic aberration", "on|off", "On|Off", "on"},
+        {"RT_LENS_FLARE", "Lens flare", "on|off", "On|Off", "on"},
+        {"RT_ANISOTROPY", "Texture filtering", "1|2|4|8|16", "Default|2x|4x|8x|16x", "1"},
+        {"RT_CVARS", "Console variables", "<name>=<value>[;...]", nullptr, ""}, // (settings file only: any cvar)
+        // (speedup.cpp: the game's overall speed while the button is held, like Fl4sh's speed cheat)
+        {"RT_SPEEDUP", "Speed-up", "off|2x|3x|5x|10x", "Off|2x|3x|5x|10x", "off"},
+        {"RT_SPEEDUP_BUTTON", "Speed-up button", "rstick|lstick|zl|zr|l|r|minus",
+         "R stick click|L stick click|ZL|ZR|L|R|Minus", "rstick"},
         {"RT_BUTTONS", "Button layout", "positions|labels", "Switch positions|Controller labels", "positions"},
         {"RT_LANGUAGE", "Language", "en-US|en-GB|fr|fr-CA|de|it|es|es-419|nl|pt-BR|ja|ko|zh-Hans|zh-Hant",
          "English (US)|English (UK)|French|French (Canada)|German|Italian|Spanish|Spanish (Latin America)|Dutch|"

@@ -27,6 +27,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 
 namespace rt::nvn {
@@ -123,6 +124,7 @@ constexpr u32 kTarget1D = 0, kTarget2D = 1, kTarget3D = 2, kTarget1DArray = 3, k
 
 std::mutex g_images_mu;
 std::map<u64, std::shared_ptr<TextureImage>> g_images; // by storage address
+std::atomic<u64> g_image_generation{0}; // ImageGeneration: one more at each image made anew or dropped
 
 // Images the hardware would have lost (2026-11-06: a tester's 2 GB GPU ran out of memory after 83 min; ~900 MB were
 // held by the time the plaza was reached, nothing ever left): an image whose storage a newer image's overlaps (on the
@@ -152,6 +154,7 @@ void DropOverlapsLocked(u64 address, u64 size) {
         if (it->first != address && img && it->first + img->state.storage.size > address) {
             ++g_dropped_overlap.n, g_dropped_overlap.bytes += img->bytes;
             it = g_images.erase(it);
+            g_image_generation.fetch_add(1, std::memory_order_relaxed);
         } else {
             ++it;
         }
@@ -288,6 +291,17 @@ std::mutex g_sampled_mu; // TextureImage::sampled of every image
 /// Formats whose fourth channel is padding ("X"): sampled, it reads as 1.
 bool AlphaIsOne(u32 format) { return format == 0x37 || format == 0x6d || format == 0x99 || format == 0x9b; }
 
+/// RT_NVN_DS_SWIZZLE=0: depth / stencil views keep the identity mapping (as before 2026-11-07; for A/B).
+bool DepthStencilSwizzleOn() {
+    static const bool on = [] {
+        const char* e = std::getenv("RT_NVN_DS_SWIZZLE");
+        const bool off = e && std::strcmp(e, "0") == 0;
+        if (off) Log("nvn: RT_NVN_DS_SWIZZLE=0: depth / stencil views ignore the game's swizzle");
+        return !off;
+    }();
+    return on;
+}
+
 VkComponentSwizzle Swizzle(u8 nvn) {
     if (nvn > 5) Fatal("nvn: texture swizzle %u", nvn);
     return static_cast<VkComponentSwizzle>(nvn + 1); // NVN 0 zero, 1 one, 2-5 r g b a: Vulkan's value - 1
@@ -325,6 +339,32 @@ VkImageView SampledView(TextureImage& img, const TextureState& t, const ViewArg&
             for (VkComponentSwizzle* c : {&comp.r, &comp.g, &comp.b, &comp.a}) {
                 if (*c == VK_COMPONENT_SWIZZLE_A) *c = VK_COMPONENT_SWIZZLE_ONE;
             }
+        }
+    } else if (img.aspect != VK_IMAGE_ASPECT_COLOR_BIT && (sw[0] | sw[1] | sw[2] | sw[3]) && DepthStencilSwizzleOn()) {
+        // Depth / stencil sampled through the game's swizzle, as drippu does (vk_texture_cache.cpp ImageView): the
+        // hardware returns depth or stencil in G, a Vulkan depth or stencil view in R - so G reads R; "one" becomes
+        // zero where the device cannot swizzle depth/stencil to one. Without it (until 2026-11-07) a swizzled view
+        // read the default R..A: the Bros. attacks' custom-stencil pass (characters kept in colour while the scene is
+        // graded) read 0 everywhere and graded the characters too.
+        const bool one_ok = Vk().device->SupportsDepthStencilSwizzleOne();
+        VkComponentSwizzle c[4];
+        for (int i = 0; i < 4; ++i) {
+            c[i] = sw[i] == 3 ? VK_COMPONENT_SWIZZLE_R : Swizzle(sw[i]); // NVN 3 = G
+            if (c[i] == VK_COMPONENT_SWIZZLE_ONE && !one_ok) c[i] = VK_COMPONENT_SWIZZLE_ZERO;
+        }
+        comp = {c[0], c[1], c[2], c[3]};
+        static std::mutex told_mu;
+        static std::set<u64> told; // each aspect / format / swizzle once
+        const u64 what = u64{aspect} << 56 | u64{b.format} << 32 | u64{sw[0]} << 24 | u64{sw[1]} << 16 | u64{sw[2]} << 8 | sw[3];
+        bool tell = false;
+        {
+            std::lock_guard lock(told_mu);
+            tell = told.size() < 32 && told.insert(what).second;
+        }
+        if (tell) {
+            Log("nvn: a %s view of texture 0x%llx (format 0x%x) sampled through swizzle %u %u %u %u (NVN; RT_NVN_DS_SWIZZLE=0: ignored)",
+                aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? "stencil" : "depth", (unsigned long long)t.address, b.format, sw[0],
+                sw[1], sw[2], sw[3]);
         }
     } else if (AlphaIsOne(b.format)) {
         comp.a = VK_COMPONENT_SWIZZLE_ONE;
@@ -441,6 +481,7 @@ std::shared_ptr<TextureImage> ImageFor(const TextureState& t, const Vulkan::vk::
     auto& slot = g_images[t.address];
     if (!slot || !SameSettings(slot->state.settings, t.settings)) {
         slot = MakeImage(t);
+        g_image_generation.fetch_add(1, std::memory_order_relaxed);
         if (EvictImages()) DropOverlapsLocked(t.address, t.storage.size);
     }
     slot->last_use_s = static_cast<u32>(Uptime());
@@ -448,12 +489,15 @@ std::shared_ptr<TextureImage> ImageFor(const TextureState& t, const Vulkan::vk::
     return slot;
 }
 
+u64 ImageGeneration() { return g_image_generation.load(std::memory_order_relaxed); }
+
 void DropImagesIn(u64 lo, u64 hi) {
     if (!EvictImages()) return;
     std::lock_guard lock(g_images_mu);
     for (auto it = g_images.lower_bound(lo); it != g_images.end() && it->first < hi;) {
         if (it->second) ++g_dropped_pool.n, g_dropped_pool.bytes += it->second->bytes;
         it = g_images.erase(it);
+        g_image_generation.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

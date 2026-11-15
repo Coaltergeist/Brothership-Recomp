@@ -55,6 +55,7 @@
 #include <set>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 
@@ -154,9 +155,14 @@ constexpr const char* kPhaseNames[kPhases] = {"targets", "pipeline", "cbufs", "s
 // "lookup" and "view": a buffer texture's pool entry and format checks, its texel view.
 // "page search": PageCopy looking for a block that holds the read; "write setup": ShaderWrite's slices, write-back
 // entry and device copy (its fill is timed as the parts above).
-enum Part : u32 { kGuestRead, kOverlay, kVisible, kNote, kGpuCopies, kRangeStats, kLookup, kView, kPageSearch, kWriteSetup, kParts };
+// "key" and "checks": PipelineFor's key and its variants' StillHolds / SameCode, BindTargets'
+// key (PipelineFor's and BindTargets' lock + map lookup count as "lookup").
+// "c0", "c2", "uniform": ConstantBuffer's banks (which of them the cbufs phase is).
+enum Part : u32 { kGuestRead, kOverlay, kVisible, kNote, kGpuCopies, kRangeStats, kLookup, kView, kPageSearch, kWriteSetup, kKey,
+                  kChecks, kC0, kC2, kUniform, kC1, kUniformHit, kUniformSmall, kParts };
 constexpr const char* kPartNames[kParts] = {"guest read", "overlay", "visible parts", "note", "GPU copies", "range stats",
-                                            "lookup", "view", "page search", "write setup"};
+                                            "lookup", "view", "page search", "write setup", "key", "checks", "c0", "c2",
+                                            "uniform", "c1", "uniform hit", "uniform small"};
 struct DrawProfile {
     std::atomic<u64> ns[kPhases]{}, bytes[kPhases]{}, scanned{0}, draws{0}, snap_hits{0}, snap_misses{0};
     std::atomic<u64> part_ns[kPhases][kParts]{};
@@ -185,6 +191,7 @@ bool PhaseTimersOn() {
     return on;
 }
 static_assert(kPhases == kHeavyPhases && kParts == kHeavyParts, "heavy.h's copies of the phase and part counts");
+static_assert(kLookup == kHeavyPartLookup && kKey == kHeavyPartKey && kChecks == kHeavyPartChecks, "heavy.h's part ids");
 
 u64 ProfileNow() {
     return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1124,6 +1131,15 @@ bool CacheCheckOn() {
 const char* HeavyPhaseName(u32 phase) { return phase < kPhases ? kPhaseNames[phase] : "?"; }
 const char* HeavyPartName(u32 part) { return part < kParts ? kPartNames[part] : "?"; }
 
+u64 HeavyPartStart() { return PhaseTimersOn() ? ProfileNow() : 0; }
+
+void HeavyPartEnd(u32 part, u64 start) {
+    if (!start || part >= kParts) return;
+    const u64 ns = ProfileNow() - start;
+    g_profile.part_ns[t_phase][part].fetch_add(ns, std::memory_order_relaxed);
+    if (t_heavy_phases) (*t_heavy_phases)[t_phase][1 + part] += ns;
+}
+
 struct BufferCache {
     static constexpr u64 kGranule = 0x40000, kPage = 0x1000;
     struct Entry {
@@ -1408,6 +1424,145 @@ bool CachedRead(Translator& t, u64 address, u64 size, u64 need, u64 min_offset, 
 // with a copy dropped at any write anywhere, 7 MB of it distinct (mostly texel buffers several draws read).
 // `need`: the alignment Vulkan requires of the binding's offset (0: `alignment`; vertex buffers have none, index
 // buffers their index size): a page copy (PageCopy) keeps the guest address's own alignment instead of `alignment`.
+bool ReuseKindOn(const char* kind); // (below, with the targets reuse)
+bool ReuseCheckOn();
+
+// After OpenSmash-Ultimate's gpu_vk.c writes_over / note_wrote: a counter per (hashed) 64 KB
+// block of guest memory, one more for each GPU write recorded in the submission over it (t.writebacks, taken in order;
+// a write of 16 MB or more, or of no size, counts everywhere). Counters only grow, so equal counters over a range's
+// blocks mean no write over it since; two blocks sharing a slot can only make a range look written (a scan then
+// decides), never the other way. Replaces the scan of every write since a snapshot was last checked, and lets
+// IndexRange keep its answers. RT_NVN_DRAW_REUSE without "gens" / "index": the scans as before.
+constexpr u32 kGenSlots = 1u << 14;
+struct WriteGens {
+    size_t seen = 0; // t.writebacks counted so far
+    u64 any = 0;
+    std::unique_ptr<u32[]> gen{new u32[kGenSlots]()};
+};
+
+u32 GenSlot(u64 block) { return static_cast<u32>((block * 0x9E3779B97F4A7C15ull) >> 50); }
+
+/// The submission's counters, with the writes up to `upto` counted (never more than recorded).
+WriteGens& GensUpTo(Translator& t, size_t upto) {
+    if (!t.write_gens) t.write_gens = std::make_shared<WriteGens>();
+    WriteGens& g = *static_cast<WriteGens*>(t.write_gens.get());
+    const std::vector<WriteBack>& w = *t.writebacks;
+    upto = std::min(upto, w.size());
+    for (; g.seen < upto; ++g.seen) {
+        const WriteBack& x = w[g.seen];
+        if (!x.size || x.size >= (u64{16} << 20)) {
+            ++g.any;
+            continue;
+        }
+        for (u64 b = x.address >> 16; b <= (x.address + x.size - 1) >> 16; ++b) ++g.gen[GenSlot(b)];
+    }
+    return g;
+}
+
+u64 GenSig(const WriteGens& g, u64 address, u64 size) {
+    u64 h = g.any * 0x9E3779B97F4A7C15ull + 1;
+    for (u64 b = address >> 16; b <= (address + std::max<u64>(size, 1) - 1) >> 16; ++b) h = h * 0x100000001B3ull + g.gen[GenSlot(b)];
+    return h;
+}
+
+bool GensOn() {
+    static const bool on = ReuseKindOn("gens");
+    return on;
+}
+
+/// RT_NVN_DRAW_REUSE_CHECK: the counters said "no write over it" - the scan must agree.
+void CheckGens(bool stale, u64 address, u64 size) {
+    static std::atomic<u64> checked{0}, differ{0};
+    const u64 n = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (stale) {
+        const u64 d = differ.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (d <= 20) {
+            Log("nvn: draw reuse check: write counters said 0x%llx+0x%llx was not written, the scan found a write",
+                (unsigned long long)address, (unsigned long long)size);
+        }
+    }
+    if (n % 100000 == 0) {
+        Log("nvn: draw reuse check: %llu snapshots kept by the write counters checked, %llu differed", (unsigned long long)n,
+            (unsigned long long)differ.load(std::memory_order_relaxed));
+    }
+}
+
+/// A new snapshot entry's counters, when they can be taken at its write position (not past it: during a draw with
+/// pending writes the counters may already include them; such an entry is scanned as before).
+void SetSnapshotGens(Translator& t, Translator::SnapshotEntry& e, u64 address, u64 size) {
+    e.gen_ok = false;
+    if (!GensOn()) return;
+    WriteGens& g = GensUpTo(t, e.writes);
+    if (g.seen != e.writes) return;
+    e.gen_sig = GenSig(g, address, size), e.gen_ok = true;
+}
+
+// RT_PROFILE_HEAVY: how the reads of a submission repeat, as OpenSmash-Ultimate's memo would
+// see them: a counter per 64 KB block of guest memory, one more for each GPU write recorded in the submission over it
+// (a write of 16 MB or more: every block); a read repeats "clean" while the counters over its blocks are those of its
+// last read. Uniform reads not seen before also count as "window clean" when their 64 KB-aligned 128 KB window was
+// read before and is clean. Kinds: 0 uniform, 1 vertex, 2 index, 3 texel, 4 storage (heavy.h HeavyReuse::reads).
+struct ReadProbe {
+    size_t writes_seen = 0;
+    u64 any = 0;
+    std::unordered_map<u64, u32> block_gen;
+    std::map<std::array<u64, 2>, u64> seen;
+    std::unordered_map<u64, u64> windows;
+};
+
+u64 BlocksSig(const ReadProbe& p, u64 address, u64 size) {
+    u64 h = p.any * 0x9E3779B97F4A7C15ull + 1;
+    for (u64 b = address >> 16; b <= (address + size - 1) >> 16; ++b) {
+        const auto it = p.block_gen.find(b);
+        h = h * 0x100000001B3ull + (it == p.block_gen.end() ? 0 : it->second);
+    }
+    return h;
+}
+
+/// RT_PROFILE_READS=1 (with RT_PROFILE_HEAVY): Phase 0b's probe; off by default since 2026-11-07 (its own lookups
+/// slowed every read of the profiled runs it was measuring).
+bool ProbeReadsOn() {
+    static const bool on = [] {
+        const char* e = std::getenv("RT_PROFILE_READS");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+void ProbeRead(Translator& t, u32 kind, u64 address, u64 size) {
+    if (!t_heavy_reuse || !size || kind >= kHeavyReadKinds || !ProbeReadsOn()) return;
+    if (!t.read_probe) t.read_probe = std::make_shared<ReadProbe>();
+    ReadProbe& p = *static_cast<ReadProbe*>(t.read_probe.get());
+    if (t.writebacks) {
+        const std::vector<WriteBack>& w = *t.writebacks;
+        for (; p.writes_seen < w.size(); ++p.writes_seen) {
+            const WriteBack& x = w[p.writes_seen];
+            if (!x.size || x.size >= (16ull << 20)) {
+                ++p.any;
+                continue;
+            }
+            for (u64 b = x.address >> 16; b <= (x.address + x.size - 1) >> 16; ++b) ++p.block_gen[b];
+        }
+    }
+    auto& r = t_heavy_reuse->reads[kind];
+    ++r[0], r[1] += size;
+    const u64 sig = BlocksSig(p, address, size);
+    const auto [it, first] = p.seen.try_emplace({address, size}, sig);
+    if (!first) {
+        if (it->second == sig) ++r[2], r[3] += size;
+        else ++r[4], r[5] += size;
+        it->second = sig;
+        return;
+    }
+    if (kind == 0 && size <= 0x10000) {
+        const u64 base = address & ~u64{0xFFFF};
+        const u64 wsig = BlocksSig(p, base, 0x20000);
+        const auto [w, new_window] = p.windows.try_emplace(base, wsig);
+        if (!new_window && w->second == wsig) ++r[6], r[7] += size;
+        w->second = wsig;
+    }
+}
+
 UploadRing::Slice Snapshot(Translator& t, u64 address, u64 size, u64 alignment, u64 min_offset = 0, u64 need = 0) {
     if (!need) need = alignment;
     const std::array<u64, 2> key{address, size};
@@ -1418,12 +1573,26 @@ UploadRing::Slice Snapshot(Translator& t, u64 address, u64 size, u64 alignment, 
     }
     if (it != t.snapshots.end() && it->second.slice.offset % need == 0 && it->second.slice.offset >= min_offset) {
         const std::vector<WriteBack>& w = *t.writebacks;
-        bool stale = false;
-        for (size_t i = it->second.writes; i < w.size() && !stale; ++i) {
-            stale = w[i].address < address + size && address < w[i].address + w[i].size;
+        bool stale = false, scan = true;
+        WriteGens* g = nullptr;
+        u64 sig_now = 0;
+        if (GensOn() && it->second.gen_ok) { // the counters over it unchanged since: no write over it
+            g = &GensUpTo(t, w.size());
+            sig_now = GenSig(*g, address, size);
+            scan = sig_now != it->second.gen_sig || ReuseCheckOn();
+        }
+        if (scan) {
+            for (size_t i = it->second.writes; i < w.size() && !stale; ++i) {
+                stale = w[i].address < address + size && address < w[i].address + w[i].size;
+            }
+            if (g && sig_now == it->second.gen_sig && ReuseCheckOn()) CheckGens(stale, address, size);
         }
         if (!stale) {
             it->second.writes = w.size();
+            if (GensOn()) { // its counters as of now (the writes it was checked against)
+                if (!g) g = &GensUpTo(t, w.size()), sig_now = GenSig(*g, address, size);
+                it->second.gen_sig = sig_now, it->second.gen_ok = g->seen == w.size();
+            }
             // RT_NVN_SNAPSHOT_CHECK=1 (test aid): a reused copy against guest memory read again, where no GPU part
             // is involved (those bytes are on the GPU only); differences are counted and logged
             static const bool check = std::getenv("RT_NVN_SNAPSHOT_CHECK") != nullptr;
@@ -1454,7 +1623,8 @@ UploadRing::Slice Snapshot(Translator& t, u64 address, u64 size, u64 alignment, 
     if (ProfileDraws()) g_profile.snap_misses.fetch_add(1, std::memory_order_relaxed);
     if (UploadRing::Slice cached{}; CachedRead(t, address, size, need, min_offset, cached)) {
         if (RangeStatsOn()) RangeStatsNote(address, size, false);
-        t.snapshots[key] = {cached, std::min(t.writebacks->size(), t.pending_from)};
+        auto& e = t.snapshots[key] = {cached, std::min(t.writebacks->size(), t.pending_from)};
+        SetSnapshotGens(t, e, address, size);
         return cached;
     }
     UploadRing::Slice paged{};
@@ -1503,20 +1673,69 @@ UploadRing::Slice Snapshot(Translator& t, u64 address, u64 size, u64 alignment, 
             }
         }
         if (RangeStatsOn()) RangeStatsNote(address, size, false);
-        t.snapshots[key] = {paged, std::min(t.writebacks->size(), t.pending_from)};
+        auto& e = t.snapshots[key] = {paged, std::min(t.writebacks->size(), t.pending_from)};
+        SetSnapshotGens(t, e, address, size);
         return paged;
     }
     const auto slice = t.upload.Allocate(size, alignment, min_offset);
     const bool gpu = FillAsGpuSees(t, address, size, slice);
     if (RangeStatsOn()) RangeStatsNote(address, size, gpu);
     if (t.bytes) t.bytes->read_fills += size;
-    t.snapshots[key] = {slice, std::min(t.writebacks->size(), t.pending_from)}; // (pending writes: as PageCopy's fills)
+    auto& e = t.snapshots[key] = {slice, std::min(t.writebacks->size(), t.pending_from)}; // (pending writes: as PageCopy's fills)
+    SetSnapshotGens(t, e, address, size);
     return slice;
 }
 
 /// The lowest and highest of `n` indices of NVNindexType `type` (0 u8, 1 u16, 2 u32), as the GPU sees them; false
 /// when a part of them only the GPU has (then the caller copies the vertex buffers whole).
+bool IndexRangeRead(Translator& t, u64 address, u32 type, u64 n, u32& lo, u32& hi);
+
+/// IndexRange's answers in this submission: kept while no GPU write was recorded over the
+/// indices' blocks since; only when the draw has no writes of its own pending (then a fresh read would see exactly
+/// the writes the counters count). RT_NVN_DRAW_REUSE without "index": read every time.
+struct IndexAnswer {
+    u64 sig;
+    u32 lo, hi;
+    bool ok;
+};
+using IndexMemo = std::map<std::array<u64, 3>, IndexAnswer>;
+
 bool IndexRange(Translator& t, u64 address, u32 type, u64 n, u32& lo, u32& hi) {
+    static const bool on = ReuseKindOn("index");
+    const std::vector<WriteBack>& w = *t.writebacks;
+    if (!on || t.pending_from < w.size()) return IndexRangeRead(t, address, type, n, lo, hi);
+    if (!t.index_memo) t.index_memo = std::make_shared<IndexMemo>();
+    IndexMemo& m = *static_cast<IndexMemo*>(t.index_memo.get());
+    WriteGens& g = GensUpTo(t, w.size());
+    const u64 sig = GenSig(g, address, n << type);
+    const std::array<u64, 3> key{address, n, type};
+    if (auto it = m.find(key); it != m.end() && it->second.sig == sig) {
+        if (ReuseCheckOn()) {
+            static std::atomic<u64> checked{0}, differ{0};
+            u32 a = 0, b = 0;
+            const bool ok = IndexRangeRead(t, address, type, n, a, b);
+            const u64 c = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (ok != it->second.ok || (ok && (a != it->second.lo || b != it->second.hi))) {
+                if (differ.fetch_add(1, std::memory_order_relaxed) < 20) {
+                    Log("nvn: draw reuse check: kept index range of 0x%llx (%llu indices) %u..%u, read now %u..%u (%s / %s)",
+                        (unsigned long long)address, (unsigned long long)n, it->second.lo, it->second.hi, a, b,
+                        it->second.ok ? "ok" : "GPU part", ok ? "ok" : "GPU part");
+                }
+            }
+            if (c % 100000 == 0) {
+                Log("nvn: draw reuse check: %llu kept index ranges checked, %llu differed", (unsigned long long)c,
+                    (unsigned long long)differ.load(std::memory_order_relaxed));
+            }
+        }
+        lo = it->second.lo, hi = it->second.hi;
+        return it->second.ok;
+    }
+    const bool ok = IndexRangeRead(t, address, type, n, lo, hi);
+    m[key] = {sig, lo, hi, ok};
+    return ok;
+}
+
+bool IndexRangeRead(Translator& t, u64 address, u32 type, u64 n, u32& lo, u32& hi) {
     thread_local std::vector<u8> buf;
     buf.resize(n << type);
     std::vector<GpuPart> gpu;
@@ -1553,6 +1772,90 @@ VkImageViewType ViewType(Shader::TextureType type) {
 /// base vertex and base instance words, for Draw to copy the GPU's values over them.
 thread_local std::vector<VkDescriptorBufferInfo>* t_c0_copies = nullptr;
 
+// After OpenSmash-Ultimate's upload_window: the game binds each draw's uniform buffer at a new
+// place (a ring of per-draw constants; Phase 0b: 99 % of those reads served by a copy already made in the submission),
+// and a first read cost ~0.5 us (an upload allocation, a new snapshot entry). Here the 64 KB-aligned block holding the
+// binding (clamped to its memory pool) is copied once a submission through Snapshot, and each binding inside it is an
+// offset into that copy, kept while the block write counters over the window are unchanged. Not used when the binding
+// does not fit or is misaligned for an offset, or while the draw has writes of its own pending (then as before).
+// RT_NVN_DRAW_REUSE without "windows": every binding copied on its own.
+struct UniformWin {
+    u64 lo = 0, hi = 0; // the guest range copied (0: none)
+    UploadRing::Slice slice{};
+    u64 sig = 0;
+    std::vector<u8> check; // RT_NVN_DRAW_REUSE_CHECK: the guest bytes as read when the window was made
+    bool check_ok = false; // (false: GPU parts, not comparable on the CPU)
+};
+using UniformWindows = std::unordered_map<u64, UniformWin>;
+
+std::atomic<u64> g_win_used{0}, g_win_made{0}, g_win_pending{0}, g_win_span{0}, g_win_pool{0}, g_win_misaligned{0};
+
+void LogWindows() {
+    const u64 n = g_win_used.load(std::memory_order_relaxed);
+    Log("nvn: uniform windows: %llu bindings read from a window (%llu windows copied); not used: %llu with writes pending, "
+        "%llu past the 64 KB block, %llu outside a pool, %llu misaligned for an offset",
+        (unsigned long long)n, (unsigned long long)g_win_made.load(), (unsigned long long)g_win_pending.load(),
+        (unsigned long long)g_win_span.load(), (unsigned long long)g_win_pool.load(), (unsigned long long)g_win_misaligned.load());
+}
+
+bool UniformWindow(Translator& t, u64 address, u64 range, u64 align, UploadRing::Slice& out) {
+    static const bool on = ReuseKindOn("windows");
+    const std::vector<WriteBack>& w = *t.writebacks;
+    if (!on) return false;
+    static std::atomic<u64> calls{0};
+    if (const u64 c = calls.fetch_add(1, std::memory_order_relaxed) + 1; c == 1000 || c % 1000000 == 0) LogWindows();
+    if (t.pending_from < w.size()) return g_win_pending.fetch_add(1, std::memory_order_relaxed), false;
+    const u64 base = address & ~u64{0xFFFF};
+    if (address + range > base + 0x10000) return g_win_span.fetch_add(1, std::memory_order_relaxed), false;
+    if (!t.uniform_windows) t.uniform_windows = std::make_shared<UniformWindows>();
+    UniformWin& win = (*static_cast<UniformWindows*>(t.uniform_windows.get()))[base];
+    WriteGens& g = GensUpTo(t, w.size());
+    if (win.hi && address >= win.lo && address + range <= win.hi && (address - win.lo) % align == 0 &&
+        GenSig(g, win.lo, win.hi - win.lo) == win.sig) {
+        out = win.slice;
+    } else {
+        const PoolRange pool = FindPool(address);
+        if (!pool.pool) return g_win_pool.fetch_add(1, std::memory_order_relaxed), false;
+        const u64 lo = std::max(base, pool.storage), hi = std::min(base + 0x10000, pool.storage + pool.size);
+        if (address < lo || address + range > hi) return g_win_span.fetch_add(1, std::memory_order_relaxed), false;
+        if ((address - lo) % align != 0) return g_win_misaligned.fetch_add(1, std::memory_order_relaxed), false;
+        win.lo = lo, win.hi = hi;
+        g_win_made.fetch_add(1, std::memory_order_relaxed);
+        win.slice = Snapshot(t, lo, hi - lo, align);
+        win.sig = GenSig(g, lo, hi - lo);
+        if (ReuseCheckOn()) {
+            std::vector<GpuPart> gpu;
+            win.check.resize(hi - lo);
+            ReadAsGpuSees(t, lo, hi - lo, win.check.data(), &gpu);
+            win.check_ok = gpu.empty();
+        }
+        out = win.slice;
+    }
+    out.offset += address - win.lo;
+    if (out.data) out.data += address - win.lo;
+    g_win_used.fetch_add(1, std::memory_order_relaxed);
+    if (ReuseCheckOn() && win.check_ok) { // the binding read fresh against the window's bytes when it was copied
+        static std::atomic<u64> checked{0}, differ{0};
+        thread_local std::vector<u8> now;
+        std::vector<GpuPart> gpu;
+        now.resize(range);
+        ReadAsGpuSees(t, address, range, now.data(), &gpu);
+        if (gpu.empty()) {
+            const u64 c = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (std::memcmp(now.data(), win.check.data() + (address - win.lo), range) != 0 &&
+                differ.fetch_add(1, std::memory_order_relaxed) < 20) {
+                Log("nvn: draw reuse check: the uniform window's bytes for 0x%llx+0x%llx differ from a fresh read",
+                    (unsigned long long)address, (unsigned long long)range);
+            }
+            if (c % 100000 == 0) {
+                Log("nvn: draw reuse check: %llu uniform window reads checked, %llu differed", (unsigned long long)c,
+                    (unsigned long long)differ.load(std::memory_order_relaxed));
+            }
+        }
+    }
+    return true;
+}
+
 VkDescriptorBufferInfo ConstantBuffer(Translator& t, u32 nvn_stage, const ProgramStage& program, const Shader::Info& info,
                                       u32 bank) {
     const RenderState& rs = *t.render;
@@ -1571,19 +1874,24 @@ VkDescriptorBufferInfo ConstantBuffer(Translator& t, u32 nvn_stage, const Progra
         copy(c0.data(), c0.size());
         if (t_c0_copies && range >= kComputeC0Groups + 12) t_c0_copies->push_back({slice.buffer, slice.offset, range});
     } else if (bank == 0) {
+        PartTimer part(kC0);
         copy(rs.c0.data(), kC0Size);
         if (t_c0_copies && range >= kC0BaseInstance + 4) t_c0_copies->push_back({slice.buffer, slice.offset, range});
     } else if (bank == 2) {
+        PartTimer part(kC2);
         copy(rs.c2[C2Index(nvn_stage)].data(), kC2Size);
     } else if (bank == 1) { // the compiler constants, in the stage's code memory
+        PartTimer part(kC1);
         std::vector<u8> v(std::min<u32>(program.constants_size, range));
         g_mem.Read(program.code + program.constants_offset, v.data(), v.size());
         copy(v.data(), v.size());
     } else {
         const auto [address, size] = rs.bindings[nvn_stage].uniform_buffers.at(bank - 3);
         if (!address) throw NotYet("a shader reading an unbound uniform buffer");
+        ProbeRead(t, 0, address, std::min<u64>(size, range));
+        PartTimer part(size < range ? kUniformSmall : kUniform); // (kUniformHit: no longer told apart - its lookup cost a map search a read)
         if (size >= range) {
-            slice = Snapshot(t, address, range, align);
+            if (!UniformWindow(t, address, range, align, slice)) slice = Snapshot(t, address, range, align);
         } else { // smaller than the shader reads: zero past it
             slice = t.upload.Allocate(range, align);
             std::memset(slice.data, 0, range);
@@ -1628,7 +1936,7 @@ void UploadLinear(Translator& t, const TextureState& tex, TextureImage& img) {
 /// it in the download ring, and a write-back from there to guest memory at retirement. Returns the slice to
 /// bind and sets `*ring` to the ring it is in. A compute shader works on a device-memory copy instead, copied
 /// into the download slice after the dispatch (Dispatch, t.after_dispatch): its atomics then run in video
-/// memory, not across the bus in host memory, where the 3090 Ti lost some of the face morphs' concurrent adds
+/// memory, not across the bus in host memory, where an NVIDIA card lost some of the face morphs' concurrent adds
 /// on the results screen (2026-10-21). RT_NVN_HOST_WRITES=1: in the download ring as before (A/B).
 UploadRing::Slice ShaderWrite(Translator& t, u64 address, u64 size, u64 align, u32 nvn_stage, WriteBack::Origin origin,
                               UploadRing*& ring) {
@@ -1716,6 +2024,7 @@ VkBufferView TexelBuffer(Translator& t, u32 id, bool written, u32 nvn_stage,
         PartTimer view(kView);
         return ring->TexelView(slice, size, format);
     }
+    ProbeRead(t, 3, e->texture.address, size);
     const auto slice = Snapshot(t, e->texture.address, size, align);
     PartTimer view(kView);
     return t.upload.TexelView(slice, size, format);
@@ -1744,6 +2053,7 @@ void AddDescriptors(Translator& t, u32 nvn_stage, const ProgramStage& program, c
                 const auto slice = ShaderWrite(t, address, size, align, nvn_stage, WriteBack::Origin::kStorageBuffer, ring);
                 entries.emplace_back(VkDescriptorBufferInfo{slice.buffer, slice.offset, size});
             } else {
+                ProbeRead(t, 4, address, size);
                 const auto slice = Snapshot(t, address, size, align);
                 entries.emplace_back(VkDescriptorBufferInfo{slice.buffer, slice.offset, size});
             }
@@ -1840,6 +2150,236 @@ void BindStageDescriptors(Translator& t, const GraphicsPipeline& p,
     }
 }
 
+// RT_PROFILE_HEAVY: whether each phase's inputs equal the previous draw's in this command
+// buffer, and the phase's time in this draw (HeavyReuse). The inputs, as the phases read them: targets = the
+// TargetSet BindTargets made (pass, framebuffer, extent, scale); pipeline = the one PipelineFor gave; constant
+// buffers = per stage and bank the source (c0's read bytes, c2's bytes, the compiler constants' place, a uniform
+// buffer's address and size); storage / texel / textures / images = the words the shaders' handles are read from,
+// the pools; vertex = the streams' bindings and layout, the draw's range and its indices; index = address, count,
+// type; record = the dynamic state set at the draw. Places, not contents: whether a GPU write was recorded since the
+// previous draw is its own check ("no GPU write since").
+// Computed after the draw, outside the phase timers (it is not part of the phases' times).
+struct ReuseKey {
+    u64 h = 1469598103934665603ull;
+    template <typename T> void Put(const T& v) {
+        const u8* b = reinterpret_cast<const u8*>(&v);
+        for (size_t i = 0; i < sizeof v; ++i) h = (h ^ b[i]) * 1099511628211ull;
+    }
+    void Words(const u8* p, size_t n) { // 8 bytes at a time (c2)
+        for (size_t i = 0; i + 8 <= n; i += 8) {
+            u64 w;
+            std::memcpy(&w, p + i, 8);
+            h = (h ^ w) * 1099511628211ull;
+        }
+    }
+};
+static_assert(kHeavyReuse <= std::tuple_size_v<decltype(Translator::reuse_keys)>, "Translator::reuse_keys' size");
+
+using PhaseNs = std::array<u64, kPhases>;
+
+PhaseNs ReuseStart() {
+    PhaseNs ns{};
+    if (t_heavy_reuse && t_heavy_phases) {
+        for (u32 i = 0; i < kPhases; ++i) ns[i] = (*t_heavy_phases)[i][0];
+    }
+    return ns;
+}
+
+void NoteReuse(Translator& t, const DrawRecord& r, const GraphicsPipeline& p, const TargetSet& targets, const PhaseNs& start) {
+    if (!t_heavy_reuse || !t_heavy_phases) return;
+    const RenderState& rs = *t.render;
+    const u64 writes = t.writebacks ? t.writebacks->size() : 0;
+    std::array<ReuseKey, kHeavyReuse> k{};
+    k[kTargets].Put(targets.pass), k[kTargets].Put(targets.framebuffer), k[kTargets].Put(targets.extent);
+    k[kTargets].Put(targets.scale_n);
+    k[kPipeline].Put(&p);
+    u32 c0_need = 0;
+    ReuseKey c2, ubo; // the parts of the cbufs key (kHeavyPhases + 2, + 3)
+    for (const auto& st : p.stages) {
+        const u32 s = st.nvn_stage;
+        for (u32 x : {u32{kCbuf}, u32{kStorage}, u32{kTexel}, u32{kTextures}, u32{kImages}}) k[x].Put(s), k[x].Put(&p);
+        for (const auto& cb : st.info.constant_buffer_descriptors) {
+            for (u32 j = 0; j < cb.count; ++j) {
+                const u32 bank = cb.index + j;
+                u32 range = st.info.constant_buffer_used_sizes[bank];
+                range = range ? std::min<u32>((range + 15) & ~15u, 0x10000) : 0x10000;
+                k[kCbuf].Put(bank), k[kCbuf].Put(range);
+                if (bank == 0) {
+                    c0_need = std::max(c0_need, std::min<u32>(range, kC0Size));
+                } else if (bank == 2) {
+                    k[kCbuf].Words(rs.c2[C2Index(s)].data(), kC2Size), c2.Put(s), c2.Words(rs.c2[C2Index(s)].data(), kC2Size);
+                } else if (bank == 1) {
+                    for (ReuseKey* x : {&k[kCbuf], &ubo}) x->Put(st.program.code + st.program.constants_offset), x->Put(st.program.constants_size);
+                } else if (bank - 3 < rs.bindings[s].uniform_buffers.size()) {
+                    for (ReuseKey* x : {&k[kCbuf], &ubo}) x->Put(rs.bindings[s].uniform_buffers[bank - 3]);
+                }
+            }
+        }
+        for (const auto& sb : st.info.storage_buffers_descriptors) {
+            for (u32 j = 0; j < sb.count; ++j) {
+                const u32 off = sb.cbuf_offset + 16 * j;
+                for (u32 w = 0; w < 12; w += 4) k[kStorage].Put(CbufWord(rs, s, sb.cbuf_index, off + w));
+                k[kStorage].Put(sb.is_written);
+            }
+        }
+        for (const auto& tb : st.info.texture_buffer_descriptors) {
+            k[kTexel].Put(CbufWord(rs, s, tb.cbuf_index, tb.cbuf_offset));
+            if (tb.has_secondary) k[kTexel].Put(CbufWord(rs, s, tb.secondary_cbuf_index, tb.secondary_cbuf_offset));
+        }
+        for (const auto& ib : st.info.image_buffer_descriptors) k[kTexel].Put(CbufWord(rs, s, ib.cbuf_index, ib.cbuf_offset));
+        for (const auto& td : st.info.texture_descriptors) {
+            k[kTextures].Put(CbufWord(rs, s, td.cbuf_index, td.cbuf_offset));
+            if (td.has_secondary) k[kTextures].Put(CbufWord(rs, s, td.secondary_cbuf_index, td.secondary_cbuf_offset));
+        }
+        for (const auto& id : st.info.image_descriptors) k[kImages].Put(CbufWord(rs, s, id.cbuf_index, id.cbuf_offset));
+    }
+    k[kTextures].Put(rs.texture_pool), k[kTextures].Put(rs.sampler_pool), k[kImages].Put(rs.texture_pool);
+    k[kIndex].Put(r.index_address), k[kIndex].Put(r.count), k[kIndex].Put(r.indexed);
+    k[kVertex].Put(p.vertex_streams), k[kVertex].Put(rs.vertex_buffers), k[kVertex].Put(rs.vertex_streams);
+    k[kVertex].Put(rs.vertex_attribs), k[kVertex].Put(r.first), k[kVertex].Put(r.count), k[kVertex].Put(r.base_instance);
+    k[kVertex].Put(r.instances), k[kVertex].Put(k[kIndex].h);
+    k[kRecord].Put(&p), k[kRecord].Put(rs.viewports[0]), k[kRecord].Put(rs.depth_ranges[0]), k[kRecord].Put(rs.scissors[0]);
+    k[kRecord].Put(rs.scissor_set[0]), k[kRecord].Put(rs.stencil_ref), k[kRecord].Put(rs.stencil_mask);
+    k[kRecord].Put(rs.stencil_value_mask), k[kRecord].Put(rs.depth_bounds_enable), k[kRecord].Put(rs.depth_bounds);
+    k[kRecord].Put(targets.scale_n), k[kRecord].Put(targets.pass);
+    // c0: the bytes the shaders read, against the previous draw's copy; once whole, once without the draw's own words
+    bool c0_same = false, c0_same_but_draw = false;
+    if (c0_need) {
+        const u8* now = rs.c0.data();
+        if (t.reuse_valid && t.reuse_c0.size() == c0_need) {
+            c0_same = std::memcmp(now, t.reuse_c0.data(), c0_need) == 0;
+            const u32 a = std::min<u32>(kC0BaseVertex, c0_need), b = std::min<u32>(kC0BaseVertex + 8, c0_need);
+            c0_same_but_draw = c0_same || (std::memcmp(now, t.reuse_c0.data(), a) == 0 &&
+                                           std::memcmp(now + b, t.reuse_c0.data() + b, c0_need - b) == 0);
+        }
+        t.reuse_c0.assign(now, now + c0_need);
+    } else {
+        c0_same = c0_same_but_draw = t.reuse_valid && t.reuse_c0.empty();
+        t.reuse_c0.clear();
+    }
+    k[kHeavyPhases] = k[kCbuf]; // "cbufs but c0 draw words": the same key, c0 judged without the draw's words
+    k[kHeavyPhases + 2] = c2, k[kHeavyPhases + 3] = ubo; // ("cbufs: c0" has no key: c0's bytes alone decide)
+    k[kHeavyPhases + 4].Put(writes); // "no GPU write since"
+    HeavyReuse& out = *t_heavy_reuse;
+    for (u32 i = 0; i < kHeavyReuse; ++i) {
+        if (i == kBook) continue; // timed outside Draw
+        const u32 phase = i < kPhases ? i : u32{kCbuf};
+        const u64 ns = (*t_heavy_phases)[phase][0] - start[phase];
+        bool same = t.reuse_valid && t.reuse_keys[i] == k[i].h;
+        if (i == kCbuf) same = same && c0_same;
+        if (i == kHeavyPhases) same = same && c0_same_but_draw;
+        if (i == kHeavyPhases + 1) same = c0_same;
+        ++out.all_n[i], out.all_ns[i] += ns;
+        if (same) ++out.same_n[i], out.same_ns[i] += ns;
+        t.reuse_keys[i] = k[i].h;
+    }
+    t.reuse_valid = true;
+}
+
+// what the previous draw in the same command buffer computed, reused by the next draw when
+// its inputs are the same. RT_NVN_DRAW_REUSE: every kind on (the default); "0": none; or the kinds on, by name
+// ("targets"). RT_NVN_DRAW_REUSE_CHECK=1: each reused result is computed again and compared, differences logged.
+bool ReuseKindOn(const char* kind) {
+    static const std::string list = [] {
+        const char* e = std::getenv("RT_NVN_DRAW_REUSE");
+        std::string v = e ? e : "";
+        if (!v.empty()) Log("nvn: draw reuse: RT_NVN_DRAW_REUSE=%s", v.c_str());
+        return v;
+    }();
+    if (list.empty()) return true;
+    if (list == "0") return false;
+    return ("," + list + ",").find(std::string(",") + kind + ",") != std::string::npos;
+}
+
+bool ReuseCheckOn() {
+    static const bool on = [] {
+        const char* e = std::getenv("RT_NVN_DRAW_REUSE_CHECK");
+        const bool v = e && *e && *e != '0';
+        if (v) Log("nvn: draw reuse: every reused result computed again and compared (RT_NVN_DRAW_REUSE_CHECK)");
+        return v;
+    }();
+    return on;
+}
+
+/// The targets reuse: off with RT_NVN_LOG_TARGETS (a reused set skips NoteImageUse, which that log counts).
+bool TargetsReuseOn() {
+    static const bool on = [] {
+        const char* log = std::getenv("RT_NVN_LOG_TARGETS");
+        return ReuseKindOn("targets") && !(log && *log && *log != '0');
+    }();
+    return on;
+}
+
+struct DrawReuse {
+    // targets: BindTargets' result for this target state, valid while the image cache has not changed
+    bool targets_valid = false;
+    u64 targets_generation = 0;
+    TargetSet targets{};
+    u32 color_count = 0;
+    std::array<RenderTarget, kMaxColorTargets> colors{};
+    bool has_depth = false;
+    RenderTarget depth{};
+};
+static_assert(std::is_trivially_copyable_v<RenderTarget>, "RenderTarget is compared as bytes");
+
+DrawReuse& ReuseOf(Translator& t) {
+    if (!t.draw_reuse) t.draw_reuse = std::make_shared<DrawReuse>();
+    return *static_cast<DrawReuse*>(t.draw_reuse.get());
+}
+
+bool SameTargetState(const DrawReuse& d, const RenderState& rs) {
+    if (d.color_count != rs.color_count || d.has_depth != rs.has_depth) return false;
+    if (std::memcmp(d.colors.data(), rs.colors.data(), sizeof(RenderTarget) * rs.color_count) != 0) return false;
+    return !rs.has_depth || std::memcmp(&d.depth, &rs.depth, sizeof d.depth) == 0;
+}
+
+std::atomic<u64> g_targets_reused{0}, g_targets_bound{0}, g_targets_checked{0}, g_targets_differ{0};
+
+void CheckReusedTargets(Translator& t, const TargetSet& reused) {
+    const TargetSet fresh = BindTargets(t);
+    const bool same = fresh.pass == reused.pass && fresh.framebuffer == reused.framebuffer &&
+                      fresh.extent.width == reused.extent.width && fresh.extent.height == reused.extent.height &&
+                      fresh.color_count == reused.color_count && fresh.colors == reused.colors &&
+                      fresh.depth == reused.depth && fresh.scale_n == reused.scale_n;
+    const u64 n = g_targets_checked.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!same) {
+        const u64 d = g_targets_differ.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (d <= 20) {
+            Log("nvn: draw reuse check: reused targets differ from fresh ones (framebuffer %p / %p, %ux%u / %ux%u, scale %u / %u)",
+                (void*)reused.framebuffer, (void*)fresh.framebuffer, reused.extent.width, reused.extent.height,
+                fresh.extent.width, fresh.extent.height, reused.scale_n, fresh.scale_n);
+        }
+    }
+    if (n % 100000 == 0) {
+        Log("nvn: draw reuse check: %llu reused target sets checked, %llu differed", (unsigned long long)n,
+            (unsigned long long)g_targets_differ.load(std::memory_order_relaxed));
+    }
+}
+
+/// BindTargets, or the previous draw's set when the target state is the same and no image was made or dropped since.
+TargetSet DrawTargets(Translator& t) {
+    if (!TargetsReuseOn()) return BindTargets(t);
+    DrawReuse& d = ReuseOf(t);
+    const RenderState& rs = *t.render;
+    if (d.targets_valid && d.targets_generation == ImageGeneration() && SameTargetState(d, rs)) {
+        const u64 n = g_targets_reused.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1 || n % 1000000 == 0) {
+            Log("nvn: draw reuse: targets reused %llu times, bound %llu (RT_NVN_DRAW_REUSE=0: never)", (unsigned long long)n,
+                (unsigned long long)g_targets_bound.load(std::memory_order_relaxed));
+        }
+        if (ReuseCheckOn()) CheckReusedTargets(t, d.targets);
+        return d.targets;
+    }
+    d.targets_valid = false;
+    const TargetSet out = BindTargets(t);
+    g_targets_bound.fetch_add(1, std::memory_order_relaxed);
+    d.targets = out, d.targets_generation = ImageGeneration(); // (after: BindTargets may have made images)
+    d.color_count = rs.color_count, d.has_depth = rs.has_depth, d.depth = rs.depth;
+    std::copy(rs.colors.begin(), rs.colors.begin() + rs.color_count, d.colors.begin());
+    d.targets_valid = true;
+    return out;
+}
+
 std::atomic<u64> g_drawn{0}, g_skipped{0}, g_waiting{0}; // g_waiting: skipped while their pipeline was built
 
 /// `gpu_params`: the parameters of an indirect draw that only the GPU has (their copy, TranslateDrawRecord):
@@ -1857,9 +2397,10 @@ void Draw(Translator& t, const DrawRecord& r, const UploadRing::Slice* gpu_param
     PendingWrites pending(t);
     RenderState& rs = *t.render;
     const auto& cmd = t.cmd;
+    const PhaseNs reuse_start = ReuseStart(); // RT_PROFILE_HEAVY
     std::optional<PhaseTimer> phase;
     phase.emplace(kTargets);
-    const TargetSet targets = BindTargets(t);
+    const TargetSet targets = DrawTargets(t); // BindTargets, or the previous draw's
     phase.reset(), phase.emplace(kPipeline);
     const GraphicsPipeline& p = PipelineFor(rs, r.mode, targets);
     const ClipModes clip = DeviceClipModes(rs.device);
@@ -1939,6 +2480,7 @@ void Draw(Translator& t, const DrawRecord& r, const UploadRing::Slice* gpu_param
             g_profile.vertex_streams.fetch_add(1, std::memory_order_relaxed);
             if (begin || end < size) g_profile.vertex_ranged.fetch_add(1, std::memory_order_relaxed);
         }
+        ProbeRead(t, 1, address + begin, end - begin);
         UploadRing::Slice slice = Snapshot(t, address + begin, end - begin, 16, begin, 1);
         slice.offset -= begin;
         vbufs.push_back({s, slice});
@@ -1950,6 +2492,7 @@ void Draw(Translator& t, const DrawRecord& r, const UploadRing::Slice* gpu_param
         const u32 type = r.indexed - 1; // NVNindexType: 0 u8, 1 u16, 2 u32
         if (type > 2 || r.count < 0) throw NotYet("index type");
         const u64 n = static_cast<u64>(r.count);
+        ProbeRead(t, 2, r.index_address, n << type);
         if (type == 0 && !Vk().device->IsExtIndexTypeUint8Supported()) { // widened to 16 bits
             std::vector<u8> v(n);
             ReadAsGpuSees(t, r.index_address, n, v.data());
@@ -2055,6 +2598,8 @@ void Draw(Translator& t, const DrawRecord& r, const UploadRing::Slice* gpu_param
     } else {
         cmd.Draw(static_cast<u32>(r.count), instances, static_cast<u32>(r.first), static_cast<u32>(r.base_instance));
     }
+    phase.reset(); // (the record phase's time counts before NoteReuse reads it)
+    NoteReuse(t, r, p, targets, reuse_start);
 }
 
 std::atomic<u64> g_dispatched{0}, g_dispatch_skipped{0};

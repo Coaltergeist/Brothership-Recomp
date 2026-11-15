@@ -21,7 +21,8 @@ License version 3 or later ([LICENSE](LICENSE)).
 
 - **The 60FPS mod for Mario & Luigi: Brothership** by Fl4sh_#9174 ([github.com/Fl4sh9174](https://github.com/Fl4sh9174),
   [ko-fi.com/Fl4sh9174](https://Ko-fi.com/Fl4sh9174)): the frame-rate patch built into the game (the Frame rate
-  setting switches it). Thanks to the author.
+  setting switches it). The Speed-up setting does natively what the same author's "Increase gamespeed HOLD ZL"
+  cheat does (the game's time dilation while a button is held). Thanks to the author.
 
 - **drippu** (GPL-3.0-or-later / GPL-2.0-or-later): `runtime/src/nvn/rescaling_pass.cpp` is adapted from its
   `shader_recompiler/ir_opt/rescaling_pass.cpp`; `runtime/src/nvn/smaa.cpp` from its

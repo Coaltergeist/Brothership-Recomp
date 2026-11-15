@@ -1,5 +1,7 @@
 # Brothership Recomp
 
+![Project screenshot](brothership-recomp.png)
+
 A static recompilation of *Mario & Luigi: Brothership* (Nintendo Switch, version 1.0.1) into a native PC program,
 in the spirit of [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) and
 [N64Recomp](https://github.com/N64Recomp/N64Recomp): the game's code is translated ahead of time into C and compiled
@@ -8,11 +10,31 @@ Vulkan). On Windows and on Linux / the Steam Deck.
 
 ## Status
 
-**Beta (Windows, Linux and Steam Deck).** The game runs on Windows (title, plaza, menus, battles; 60 fps, internal
-resolution up to 4K, SMAA) and on Linux as an AppImage (on the Steam Deck: 30 fps at 720p). The download is a launcher
-that installs the game from your own files: it unpacks your dump, translates and compiles the game's code and prepares
-its shaders on your computer (about 10-15 minutes on a fast PC, longer on a Steam Deck; ~25 GB free disk space while
-it runs).
+**Complete: version 1.0 (Windows, Linux and Steam Deck).** The whole game can be played from start to end - a
+tester finished it at 60 fps on Windows. On Linux it runs as an AppImage, on the Steam Deck at 30 fps (720p). The
+download is a launcher that installs the game from your own files: it unpacks your dump, translates and compiles the
+game's code and prepares its shaders on your computer (about 10-15 minutes on a fast PC, longer on a Steam Deck;
+~25 GB free disk space while it runs). Changes per version are in the [releases](../../releases).
+
+## What you get
+
+- **Frame rate:** 30, 60 or uncapped. 60 and above use the built-in 60FPS patch (see Thanks), with fixes for the
+  timing differences found at 60 (battle actions, field events, a boss's attack).
+- **Resolution:** 360p up to 4K (Auto follows the window), windowed or borderless; anti-aliasing FXAA, SMAA or off.
+- **Effects:** bloom, film grain, vignette, auto exposure, chromatic aberration, lens flare and texture filtering
+  (up to 16x), each adjustable.
+- **Speed-up:** hold a button to run the game 2x to 10x as fast.
+- **Languages and controls:** all 14 of the game's languages; button layout by Switch positions or by your
+  controller's labels.
+
+## Known limits
+
+- The Steam Deck runs the game at 30 fps; 60 is not reached there.
+- A few busy scenes (large crowds, some cutscenes) run below 60 fps even on fast PCs.
+- About 0.5 % of the game's shaders are prepared the first time they are needed: a short stutter then.
+- Cheat files (Atmosphere) do not work: they patch the Switch's machine code, which a recompiled game no longer runs.
+
+Tested on PCs with NVIDIA and AMD graphics cards (Windows and Linux, including Wayland) and on the Steam Deck.
 
 ## Installing
 
@@ -49,13 +71,20 @@ distributed. Please do not ask for game files or keys.
 - `lifter/` - the recompiler: AArch64 machine code to C.
 - `runtime/` - what the recompiled code runs on: memory, threads, the Switch's system services, the NVN graphics
   layer on Vulkan (shader translation, resolution scaling, anti-aliasing), sound and input.
-- `tools/` - build, analysis and test tools (shader seed, cross-compilation, benchmarks).
+- `tools/` - build, packaging and test tools (the game builder's toolchain, shader seed, cross-compilation).
 - `linux/` - the Linux package's build script, `AppRun` and desktop files.
 - `tests/` - regression tests (a homebrew program run through the whole pipeline, platform tests).
 - `third_party/` - libraries as git submodules (see [NOTICE.md](NOTICE.md)).
 
 Building the launcher itself needs a developer setup (cross-compiled from WSL with clang; `tools/package_windows.sh`
 makes the Windows download, `tools/package_appimage.sh` the Linux AppImage).
+
+## Thanks
+
+- **Rally** and **Blueji**, the testers, who were both extremely helpful in finding bugs.
+- **Fl4sh_#9174**, for the 60FPS mod for *Mario & Luigi: Brothership*, built into the game here, and the speed cheat
+  the Speed-up setting is modelled on.
+- The projects listed in [NOTICE.md](NOTICE.md), whose code this one builds on.
 
 ## License
 

@@ -163,9 +163,7 @@ void Prepare(Smaa& s, vk::CommandBuffer& cmd) {
 bool SmaaOn() {
     static const bool on = [] {
         const char* v = options::Get("RT_AA");
-        if (!v || std::strcmp(v, "off") == 0) return false;
-        if (std::strcmp(v, "smaa") != 0) Fatal("RT_AA=%s: expected off or smaa", v);
-        return true;
+        return v && std::strcmp(v, "smaa") == 0; // (fxaa, none, off: no SMAA; options.cpp checks the values)
     }();
     return on;
 }

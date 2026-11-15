@@ -4,6 +4,11 @@
 #include "diag.h"
 #include "gpu.h"
 #include "hle.h"
+#include "bp_trace.h"
+#include "bt_pacing.h"
+#include "snaptor_fix.h"
+#include "cvars.h"
+#include "speedup.h"
 #include "sequencer_fix.h"
 #include "mods.h"
 #include "ui/start.h"
@@ -792,6 +797,7 @@ void Fatal(const char* fmt, ...) {
     va_end(ap);
     LogGuestState();
     std::fflush(stderr);
+    platform::NoteOwnExit();
     std::_Exit(70);
 }
 
@@ -809,6 +815,7 @@ void Exit(int code) {
     std::fflush(stdout);
     Log("guest exited with code %d", code);
     std::fflush(stderr);
+    platform::NoteOwnExit();
     std::_Exit(code); // other guest threads may still be running or blocked
 }
 
@@ -1187,6 +1194,17 @@ int main(int argc, char** argv) {
     if (const char* v = std::getenv("RT_SEQUENCER_FIX"); frame_rate_patch && !(v && std::strcmp(v, "0") == 0)) {
         sequencer_fix::Install();
     }
+    // Behaviour-tree steps at the 30 fps pace above 30 fps (bt_pacing.cpp); RT_BT_PACING=0: off (A/B runs).
+    if (const char* v = std::getenv("RT_BT_PACING"); frame_rate_patch && !(v && std::strcmp(v, "0") == 0)) {
+        bt_pacing::Install();
+    }
+    // Mega Snaptor stays home after its rush attack above 30 fps (snaptor_fix.cpp); RT_SNAPTOR_FIX=0: off (A/B runs).
+    if (const char* v = std::getenv("RT_SNAPTOR_FIX"); frame_rate_patch && !(v && std::strcmp(v, "0") == 0)) {
+        snaptor_fix::Install();
+    }
+    bp_trace::Install(); // RT_BP_TRACE: the game's Blueprint calls by name (bp_trace.cpp)
+    cvars::Install();    // the effect options: the game's console variables (cvars.cpp)
+    speedup::Install();  // RT_SPEEDUP: the game's speed while a button is held (speedup.cpp)
     nvn::Init();
     nvn::tap::Init();
 

@@ -341,6 +341,8 @@ void InstallCrashReport(void (*describe)()) {
     sigaction(SIGSEGV, &sa, nullptr);
 }
 
+void NoteOwnExit() {}
+
 void InstallDumpTrigger(void (*request)()) {
     g_dump_request = request;
     signal(SIGUSR1, OnDumpSignal);

@@ -16,6 +16,7 @@
 // captures), else the whole target. Not yet: colour channel masks other than
 // all four, stencil masks other than 0 or 0xff (Vulkan clears ignore write
 // masks), layered clears beyond the view's layers.
+#include "heavy.h"
 #include "pipeline.h"
 
 #include <algorithm>
@@ -312,7 +313,10 @@ struct Framebuffer {
     Vulkan::vk::Framebuffer framebuffer;
     std::vector<std::weak_ptr<TextureImage>> images; // a view handle may be reused once its image is gone
 };
-std::map<std::vector<u64>, Framebuffer> g_framebuffers; // (pass, views...) -> framebuffer
+constexpr u32 kMaxAttachments = kMaxColorTargets + 1;
+/// (pass, layers, views..., zeros) -> framebuffer. A fixed array (no vector per draw).
+using FramebufferKey = std::array<u64, 2 + kMaxAttachments>;
+std::map<FramebufferKey, Framebuffer> g_framebuffers;
 
 template <typename T>
 T Get(const u8* p, size_t size, size_t at = 0) {
@@ -448,8 +452,9 @@ TargetSet BindTargets(Translator& t) {
     out.color_count = rs.color_count;
     out.colors.fill(VK_FORMAT_UNDEFINED);
     out.depth = VK_FORMAT_UNDEFINED;
-    std::vector<VkImageView> views;
-    std::vector<std::weak_ptr<TextureImage>> images;
+    std::array<VkImageView, kMaxAttachments> views{};
+    std::array<std::shared_ptr<TextureImage>, kMaxAttachments> images{};
+    u32 n = 0; // attachments in views / images
     VkExtent2D extent{~0u, ~0u};
     u32 layers = ~0u;
     out.scale_n = 0;
@@ -464,8 +469,7 @@ TargetSet BindTargets(Translator& t) {
         out.scale_n = img->scale_n;
         const TextureImage::Attachment& a = AttachmentOf(*img, rt, depth);
         NoteImageUse(rt.texture, depth ? ImageUse::kDepth : ImageUse::kColor, TargetLevel(rt));
-        views.push_back(*a.view);
-        images.push_back(img);
+        views[n] = *a.view, images[n] = img, ++n;
         extent = {std::min(extent.width, a.extent.width), std::min(extent.height, a.extent.height)};
         layers = std::min(layers, a.layers);
         return img->format;
@@ -474,11 +478,14 @@ TargetSet BindTargets(Translator& t) {
         if (rs.colors[i].texture.address) out.colors[i] = add(rs.colors[i], false);
     }
     if (rs.has_depth && rs.depth.texture.address) out.depth = add(rs.depth, true);
-    if (views.empty()) Fatal("nvn: a draw without render targets is not implemented yet");
+    if (!n) Fatal("nvn: a draw without render targets is not implemented yet");
+    const u64 key_t = HeavyPartStart(); // key, lookup (the rest: the targets' images)
     out.pass = TargetsPass(out.colors, out.color_count, out.depth);
     out.extent = extent;
-    std::vector<u64> key{reinterpret_cast<u64>(out.pass), layers};
-    for (VkImageView v : views) key.push_back(reinterpret_cast<u64>(v));
+    FramebufferKey key{reinterpret_cast<u64>(out.pass), layers};
+    for (u32 i = 0; i < n; ++i) key[2 + i] = reinterpret_cast<u64>(views[i]);
+    HeavyPartEnd(kHeavyPartKey, key_t);
+    const u64 lookup_t = HeavyPartStart();
     std::lock_guard lock(g_targets_mu);
     if (g_framebuffers.size() >= 4096) { // entries whose images are gone (images.cpp drops images; their views went too)
         std::erase_if(g_framebuffers, [](const auto& e) {
@@ -494,15 +501,16 @@ TargetSet BindTargets(Translator& t) {
             .pNext = nullptr,
             .flags = 0,
             .renderPass = out.pass,
-            .attachmentCount = static_cast<u32>(views.size()),
+            .attachmentCount = n,
             .pAttachments = views.data(),
             .width = extent.width,
             .height = extent.height,
             .layers = layers,
         });
-        fb.images = std::move(images);
+        fb.images.assign(images.begin(), images.begin() + n);
     }
     out.framebuffer = *fb.framebuffer;
+    HeavyPartEnd(kHeavyPartLookup, lookup_t);
     return out;
 }
 

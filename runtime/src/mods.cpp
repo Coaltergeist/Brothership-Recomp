@@ -92,6 +92,11 @@ const std::vector<std::string>& Enabled(const std::vector<std::string>& built) {
             Fatal("RT_MODS: mod %s has exefs patches, but this build was lifted without them: re-lift with "
                   "nxrecomp --mod \"<mods folder>/%s\"", name.c_str(), name.c_str());
         }
+        std::error_code ec;
+        if (folder && fs::is_directory(dir / name / "cheats", ec)) {
+            Log("mods: %s has cheats/: Atmosphere cheats are not supported (a static recompile cannot rewrite the "
+                "game's code while it runs); for the speed cheat use the Speed-up setting", name.c_str());
+        }
         g_enabled.push_back(name);
     }
     return g_enabled;
