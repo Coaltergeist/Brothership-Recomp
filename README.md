@@ -1,6 +1,6 @@
 # Brothership Recomp
 
-![Project screenshot](brothership-recomp.png)
+<a href="https://recomplauncher.com/game/brothership-recomp"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
 
 A static recompilation of *Mario & Luigi: Brothership* (Nintendo Switch, version 1.0.1) into a native PC program,
 in the spirit of [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) and
@@ -84,6 +84,8 @@ makes the Windows download, `tools/package_appimage.sh` the Linux AppImage).
 - **Rally** and **Blueji**, the testers, who were both extremely helpful in finding bugs.
 - **Fl4sh_#9174**, for the 60FPS mod for *Mario & Luigi: Brothership*, built into the game here, and the speed cheat
   the Speed-up setting is modelled on.
+- **Xarishark**, for RecompLauncher support (installing, building and starting the game from
+  [RecompLauncher](https://recomplauncher.com/game/brothership-recomp)).
 - The projects listed in [NOTICE.md](NOTICE.md), whose code this one builds on.
 
 ## License

@@ -80,8 +80,9 @@ void Stop();
 const char* StageName(Stage s);
 
 /// `nxrt --build`: builds with the settings' paths, progress on stdout, Ctrl+C cancels; the process's exit code. A
-/// current module with no seed marker beside the pipeline cache gets the shader steps alone.
-int Command();
+/// current module with no seed marker beside the pipeline cache gets the shader steps alone. `launcher` (`--prepare`):
+/// each status line is followed by `progress <0-1> <step>`, the form RecompLauncher reads.
+int Command(bool launcher = false);
 
 /// Whether a seed marker (`<program id>.nvn.seed`) is beside the pipeline cache (RT_PIPELINE_CACHE, else the per-user
 /// folder's cache\): the seed ran for some driver (the seed run itself checks that it was this one).
